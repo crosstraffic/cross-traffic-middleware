@@ -10,6 +10,7 @@ pub struct WasmSubSegment {
 #[wasm_bindgen]
 impl WasmSubSegment {
 
+    #[wasm_bindgen(constructor)]
     pub fn new(length: f64, avg_speed: f64, hor_class: i32, design_rad: f64, sup_ele: f64) -> Self {
         WasmSubSegment {
 
@@ -67,8 +68,9 @@ pub struct WasmSegment {
 #[wasm_bindgen]
 impl WasmSegment {
 
+    #[wasm_bindgen(constructor)]
     pub fn new(passing_type: usize, length: f64, grade: f64, spl: f64, is_hc: bool, volume: f64, volume_op: f64, flow_rate: f64, flow_rate_o: f64, capacity: i32,
-        ffs: f64, avg_speed: f64, vertical_class: i32, wasm_subsegments: Vec<WasmSubSegment>, phf: f64, phv: f64, pf: f64, fd: f64, hor_class: i32) -> Self {
+        ffs: f64, avg_speed: f64, vertical_class: i32, wasm_subsegments: Vec<WasmSubSegment>, phf: f64, phv: f64, pf: f64, fd: f64, fd_mid: f64, hor_class: i32) -> Self {
 
         let mut subsegments: Vec<SubSegment> = vec![];
 
@@ -100,6 +102,7 @@ impl WasmSegment {
                 phv,
                 pf,
                 fd,
+                fd_mid,
                 hor_class,
             ),
         }
@@ -154,6 +157,7 @@ impl WasmSegment {
         js_sys::Reflect::set(&obj, &JsValue::from_str("phv"), &JsValue::from(self.get_phv())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("pf"), &JsValue::from(self.get_percent_followers())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("fd"), &JsValue::from(self.get_followers_density())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("fd_mid"), &JsValue::from(self.get_followers_density_mid())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("hor_class"), &JsValue::from(self.get_hor_class())).unwrap();
 
         JsValue::from(obj)
@@ -263,6 +267,9 @@ impl WasmSegment {
     // //     self.fd = fd
     // // }
 
+    pub fn get_followers_density_mid(&self) -> f64 {
+        self.inner.get_followers_density_mid()
+    }
     pub fn get_hor_class(&self) -> i32 {
         self.inner.get_hor_class()
     }
@@ -279,6 +286,7 @@ pub struct WasmTwoLaneHighways{
 #[wasm_bindgen]
 impl WasmTwoLaneHighways {
 
+    #[wasm_bindgen(constructor)]
     pub fn new(wasm_segments: Vec<WasmSegment>, lane_width: f64, shoulder_width: f64, apd: f64, pmhvfl: f64, l_de: f64) -> Self {
 
         let mut segments: Vec<Segment> = vec![];
@@ -305,10 +313,62 @@ impl WasmTwoLaneHighways {
         }
     }
 
-    // pub fn get_segments(&self) -> JsValue {
-    //     let segments: &Vec<Segment> = self.inner.get_segments();
-    //     serde_wasm_bindgen::to_value(&segments).unwrap()
-    // }
+    pub fn segs_to_js_value(&self) -> JsValue {
+        let js_array = js_sys::Array::new();
+
+        let segments = self.inner.get_segments();
+
+        for (_, seg) in segments.iter().enumerate() {
+            let sub_js_array = js_sys::Array::new();
+
+            let obj = js_sys::Object::new();
+            
+            js_sys::Reflect::set(&obj, &JsValue::from_str("passing_type"), &JsValue::from(seg.get_passing_type())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("length"), &JsValue::from(seg.get_length())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("grade"), &JsValue::from(seg.get_grade())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("spl"), &JsValue::from(seg.get_spl())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("is_hc"), &JsValue::from(seg.get_is_hc())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("volume"), &JsValue::from(seg.get_volume())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("volume_op"), &JsValue::from(seg.get_volume_op())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("flow_rate"), &JsValue::from(seg.get_flow_rate())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("flow_rate_o"), &JsValue::from(seg.get_flow_rate_o())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from(seg.get_capacity())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("ffs"), &JsValue::from(seg.get_ffs())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("avg_speed"), &JsValue::from(seg.get_avg_speed())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("vertical_class"), &JsValue::from(seg.get_vertical_class())).unwrap();
+            for (_, subseg) in seg.get_subsegments().iter().enumerate() {
+                let sub_obj = js_sys::Object::new();
+                js_sys::Reflect::set(&sub_obj, &JsValue::from_str("length"), &JsValue::from(subseg.get_length())).unwrap();
+                js_sys::Reflect::set(&sub_obj, &JsValue::from_str("avg_speed"), &JsValue::from(subseg.get_avg_speed())).unwrap();
+                js_sys::Reflect::set(&sub_obj, &JsValue::from_str("hor_class"), &JsValue::from(subseg.get_hor_class())).unwrap();
+                js_sys::Reflect::set(&sub_obj, &JsValue::from_str("design_rad"), &JsValue::from(subseg.get_design_rad())).unwrap();
+                js_sys::Reflect::set(&sub_obj, &JsValue::from_str("sup_ele"), &JsValue::from(subseg.get_sup_ele())).unwrap();
+                sub_js_array.push(&sub_obj);
+            }
+            js_sys::Reflect::set(&obj, &JsValue::from_str("subsegments"), &JsValue::from(sub_js_array)).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("phf"), &JsValue::from(seg.get_phf())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("phv"), &JsValue::from(seg.get_phv())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("pf"), &JsValue::from(seg.get_percent_followers())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("fd"), &JsValue::from(seg.get_followers_density())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("fd_mid"), &JsValue::from(seg.get_followers_density_mid())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("hor_class"), &JsValue::from(seg.get_hor_class())).unwrap();
+
+            // Convert the JavaScript object to a JsValue
+            js_array.push(&obj);
+        }
+
+        // for subseg in subsegments {
+        //     let subseg_js_value = subseg[index].to_js_value();
+
+        //     js_array.push(&subseg_js_value);
+        // }
+
+        JsValue::from(js_array)
+    }
+
+    pub fn get_segments(&self) -> JsValue {
+        self.segs_to_js_value()
+    }
     
     pub fn identify_vertical_class(&mut self, seg_num: usize) -> Vec<f64> {
         let mut _min = 0.0;
@@ -349,8 +409,9 @@ impl WasmTwoLaneHighways {
         self.inner.estimate_percent_followers_sf(seg_num, vd, phv)
     }
 
-    pub fn determine_follower_density_pl(&mut self, seg_num: usize) -> f64 {
-        self.inner.determine_follower_density_pl(seg_num)
+    pub fn determine_follower_density_pl(&mut self, seg_num: usize) -> Vec<f64> {
+        let (fd, fd_mid) = self.inner.determine_follower_density_pl(seg_num);
+        vec![fd, fd_mid]
     }
 
     pub fn determine_follower_density_pc_pz(&mut self, seg_num: usize) -> f64 {
