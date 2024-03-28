@@ -144,6 +144,8 @@ dependencies = [
 [[package]]
 name = "transportations_library"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e6d2dd9b4113d3cd2bb4badbf96669adac3d88d1f1f564135af79319936dce8"
 dependencies = [
  "assert_approx_eq",
  "round",
