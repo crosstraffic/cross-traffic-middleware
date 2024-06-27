@@ -127,6 +127,7 @@ impl WasmSegment {
             js_sys::Reflect::set(&obj, &JsValue::from_str("avg_speed"), &JsValue::from(subseg.get_avg_speed())).unwrap();
             js_sys::Reflect::set(&obj, &JsValue::from_str("hor_class"), &JsValue::from(subseg.get_hor_class())).unwrap();
             js_sys::Reflect::set(&obj, &JsValue::from_str("design_rad"), &JsValue::from(subseg.get_design_rad())).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("central_angle"), &JsValue::from(subseg.get_central_angle())).unwrap();
             js_sys::Reflect::set(&obj, &JsValue::from_str("sup_ele"), &JsValue::from(subseg.get_sup_ele())).unwrap();
             
             // Convert the JavaScript object to a JsValue
