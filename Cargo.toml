@@ -26,3 +26,6 @@ pyo3 = { version = "0.21.2", features = ["extension-module"], optional = true}
 [lib]
 name = "crosstraffic_middleware"
 crate-type = ["cdylib", "rlib"]
+
+[package.metadata.maturin]
+name = "transportations_library"

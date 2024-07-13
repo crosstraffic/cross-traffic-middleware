@@ -1,16 +1,16 @@
 use transportations_library::{ TwoLaneHighways as LibTwoLaneHighways, Segment as LibSegment, SubSegment as LibSubSegment };
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 use pyo3::prelude::*;
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct SubSegment {
     inner: LibSubSegment,
 }
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pymethods]
 impl SubSegment {
 
@@ -58,14 +58,14 @@ impl SubSegment {
 
 
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct Segment {
     inner: LibSegment,
 }
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pymethods]
 impl Segment {
 
@@ -220,14 +220,14 @@ impl Segment {
 
 
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct TwoLaneHighways{
     inner: LibTwoLaneHighways,
 }
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pymethods]
 impl TwoLaneHighways {
 
@@ -314,9 +314,9 @@ impl TwoLaneHighways {
 }
 
 
-#[cfg(feature = "pybindings")]
+// #[cfg(feature = "pybindings")]
 #[pymodule]
-fn crosstraffic_middleware(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn transportations_library(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SubSegment>()?;
     m.add_class::<Segment>()?;
     m.add_class::<TwoLaneHighways>()?;
