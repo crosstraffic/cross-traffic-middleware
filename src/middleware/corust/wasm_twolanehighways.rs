@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use transportations_library::{ TwoLaneHighways, Segment, SubSegment };
+use transportations_library::twolanehighways::{ TwoLaneHighways, Segment, SubSegment };
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
@@ -11,9 +11,15 @@ pub struct WasmSubSegment {
 impl WasmSubSegment {
 
     #[wasm_bindgen(constructor)]
-    pub fn new(length: f64, avg_speed: f64, hor_class: i32, design_rad: f64, central_angle: f64, sup_ele: f64) -> Self {
+    pub fn new(
+        length: Option<f64>,
+        avg_speed: Option<f64>,
+        design_rad: Option<f64>,
+        central_angle: Option<f64>,
+        hor_class: Option<i32>,
+        sup_ele: Option<f64>
+    ) -> Self {
         WasmSubSegment {
-
             inner: SubSegment::new(
                 length,
                 avg_speed,
@@ -75,8 +81,28 @@ pub struct WasmSegment {
 impl WasmSegment {
 
     #[wasm_bindgen(constructor)]
-    pub fn new(passing_type: usize, length: f64, grade: f64, spl: f64, is_hc: bool, volume: f64, volume_op: f64, flow_rate: f64, flow_rate_o: f64, capacity: i32,
-        ffs: f64, avg_speed: f64, vertical_class: i32, wasm_subsegments: Vec<WasmSubSegment>, phf: f64, phv: f64, pf: f64, fd: f64, fd_mid: f64, hor_class: i32) -> Self {
+    pub fn new(
+        passing_type: usize,
+        length: f64,
+        grade: f64,
+        spl: f64,
+        is_hc: Option<bool>,
+        volume: Option<f64>,
+        volume_op: Option<f64>,
+        flow_rate: Option<f64>,
+        flow_rate_o: Option<f64>,
+        capacity: Option<i32>,
+        ffs: Option<f64>,
+        avg_speed: Option<f64>,
+        vertical_class: Option<i32>,
+        wasm_subsegments: Vec<WasmSubSegment>,
+        phf: Option<f64>,
+        phv: Option<f64>,
+        pf: Option<f64>,
+        fd: Option<f64>,
+        fd_mid: Option<f64>,
+        hor_class: Option<i32>
+    ) -> Self {
 
         let mut subsegments: Vec<SubSegment> = vec![];
 
@@ -87,6 +113,12 @@ impl WasmSegment {
             let subsegment: SubSegment = serde_wasm_bindgen::from_value(js_subsegment).unwrap();
             subsegments.push(subsegment);
         }
+
+        let subsegments_option = if subsegments.is_empty() {
+            None
+        } else {
+            Some(subsegments)
+        };
 
         WasmSegment {
             inner: Segment::new(
@@ -103,7 +135,7 @@ impl WasmSegment {
                 ffs,
                 avg_speed,
                 vertical_class,
-                subsegments,
+                subsegments_option,
                 phf,
                 phv,
                 pf,
@@ -120,7 +152,7 @@ impl WasmSegment {
 
         let subsegments = self.inner.get_subsegments();
 
-        for (_, subseg) in subsegments.iter().enumerate() {
+        for subseg in subsegments.iter() {
 
             let obj = js_sys::Object::new();
             js_sys::Reflect::set(&obj, &JsValue::from_str("length"), &JsValue::from(subseg.get_length())).unwrap();
@@ -133,12 +165,6 @@ impl WasmSegment {
             // Convert the JavaScript object to a JsValue
             js_array.push(&obj);
         }
-
-        // for subseg in subsegments {
-        //     let subseg_js_value = subseg[index].to_js_value();
-
-        //     js_array.push(&subseg_js_value);
-        // }
 
         JsValue::from(js_array)
     }
@@ -294,15 +320,22 @@ pub struct WasmTwoLaneHighways{
 impl WasmTwoLaneHighways {
 
     #[wasm_bindgen(constructor)]
-    pub fn new(wasm_segments: Vec<WasmSegment>, lane_width: f64, shoulder_width: f64, apd: f64, pmhvfl: f64, l_de: f64) -> Self {
+    pub fn new(
+        wasm_segments: Vec<WasmSegment>,
+        lane_width: Option<f64>,
+        shoulder_width: Option<f64>,
+        apd: Option<f64>,
+        pmhvfl: Option<f64>,
+        l_de: Option<f64>
+    ) -> Self {
 
         let mut segments: Vec<Segment> = vec![];
 
-        for (index, _) in wasm_segments.iter().enumerate() {
+        for wasm_segment in wasm_segments.iter() {
 
             // let cloned_subsegments = wasm_subsegments.clone();
 
-            let js_segment = wasm_segments[index].to_js_value();
+            let js_segment = wasm_segment.to_js_value();
             
             let segment: Segment = serde_wasm_bindgen::from_value(js_segment).unwrap();
             segments.push(segment);
@@ -322,12 +355,10 @@ impl WasmTwoLaneHighways {
 
     pub fn segs_to_js_value(&self) -> JsValue {
         let js_array = js_sys::Array::new();
-
         let segments = self.inner.get_segments();
 
-        for (_, seg) in segments.iter().enumerate() {
+        for seg in segments.iter() {
             let sub_js_array = js_sys::Array::new();
-
             let obj = js_sys::Object::new();
             
             js_sys::Reflect::set(&obj, &JsValue::from_str("passing_type"), &JsValue::from(seg.get_passing_type())).unwrap();
@@ -364,12 +395,6 @@ impl WasmTwoLaneHighways {
             // Convert the JavaScript object to a JsValue
             js_array.push(&obj);
         }
-
-        // for subseg in subsegments {
-        //     let subseg_js_value = subseg[index].to_js_value();
-
-        //     js_array.push(&subseg_js_value);
-        // }
 
         JsValue::from(js_array)
     }
