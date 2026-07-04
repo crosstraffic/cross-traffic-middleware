@@ -1,2 +1,16 @@
 pub mod wasm_twolanehighways;
 pub mod wasm_basicfreeways;
+pub mod wasm_managed_lanes;
+pub mod wasm_freeway_facilities;
+pub mod wasm_freeway_reliability;
+pub mod wasm_weaving;
+pub mod wasm_merge_diverge;
+pub mod wasm_urban_facilities;
+pub mod wasm_urban_reliability;
+pub mod wasm_urban_segments;
+pub mod wasm_signalized;
+pub mod wasm_twsc;
+pub mod wasm_awsc;
+pub mod wasm_roundabouts;
+pub mod wasm_interchange;
+pub mod wasm_pedbike;
