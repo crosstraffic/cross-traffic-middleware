@@ -87,9 +87,12 @@ impl WasmBasicFreeways {
 
     /// Run the full HCM Ch.12 operational analysis and return the LOS letter.
     /// Populates ffs, capacity, speed, density, and v/c ratio.
-    pub fn run_operational_analysis(&mut self) -> String {
-        let los: char = self.inner.run_operational_analysis().into();
-        los.to_string()
+    pub fn run_operational_analysis(&mut self) -> Result<String, JsValue> {
+        let los = self.inner
+            .run_operational_analysis()
+            .map_err(|e| JsValue::from_str(&e))?;
+        let los: char = los.into();
+        Ok(los.to_string())
     }
 
     pub fn determine_free_flow_speed(&mut self) -> f64 {
