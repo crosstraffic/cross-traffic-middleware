@@ -29,6 +29,11 @@ impl WasmBasicFreeways {
         length: Option<f64>,
         highway_type: Option<String>,
         city_type: Option<String>,
+        // Single-unit-truck share of the heavy-vehicle mix. 0 (or omitted) reads
+        // the general-terrain exhibit (12-25); 30/50/70 select the specific-upgrade
+        // exhibits (12-26/27/28). Appended last so existing positional callers that
+        // omit it fall back to general terrain.
+        sut_percentage: Option<u32>,
     ) -> Self {
         let mut inner = BasicFreeways::new();
         if let Some(v) = bffs {
@@ -82,6 +87,9 @@ impl WasmBasicFreeways {
                 _ => CityType::Urban,
             };
         }
+        if let Some(v) = sut_percentage {
+            inner.sut_percentage = v;
+        }
         WasmBasicFreeways { inner }
     }
 
@@ -127,6 +135,13 @@ impl WasmBasicFreeways {
         self.inner.lane_count
     }
 
+    /// Passenger-car equivalent for heavy vehicles (E_T), populated by the
+    /// analysis. This is what `sut_percentage` selects: general terrain vs. the
+    /// specific-upgrade exhibits. 0.0 before the analysis has run.
+    pub fn get_e_t(&self) -> f64 {
+        self.inner.e_t.unwrap_or(0.0)
+    }
+
     pub fn results_to_js_value(&self) -> JsValue {
         let obj = js_sys::Object::new();
         js_sys::Reflect::set(&obj, &JsValue::from_str("ffs"), &JsValue::from(self.get_ffs())).unwrap();
@@ -135,6 +150,7 @@ impl WasmBasicFreeways {
         js_sys::Reflect::set(&obj, &JsValue::from_str("speed"), &JsValue::from(self.get_speed())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("density"), &JsValue::from(self.get_density())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("vc_ratio"), &JsValue::from(self.get_vc_ratio())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("e_t"), &JsValue::from(self.get_e_t())).unwrap();
 
         JsValue::from(obj)
     }
