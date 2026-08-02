@@ -1,10 +1,26 @@
-use wasm_bindgen::prelude::*;
+use transportations_library::common::HcmVersion;
 use transportations_library::weaving::{FacilityType, TerrainType, WeavingSegment, WeavingType};
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct WasmWeavingSegment {
     inner: WeavingSegment,
+}
+
+impl WasmWeavingSegment {
+    /// The stepwise methods implement the 7th Edition's numbered steps, which Edition 7.1
+    /// replaced with a different structure. They throw on a "7.1" segment rather than
+    /// silently returning 7th Edition numbers.
+    fn require_v7(&self, method: &str) -> Result<(), JsValue> {
+        if self.inner.version == HcmVersion::V7_1 {
+            return Err(JsValue::from_str(&format!(
+                "{method}() implements the 7th Edition step structure, but this segment is \
+                 version \"7.1\". Use run_analysis() and analysis_v7_1() instead."
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
@@ -33,6 +49,13 @@ impl WasmWeavingSegment {
         basic_freeway_capacity: Option<f64>,
         caf: Option<f64>,
         saf: Option<f64>,
+        // Edition 7.1 configuration weighting reads the weaving-lane counts; the 7th Edition
+        // methodology ignores them. Appended last so existing positional callers are unchanged.
+        nw_rf: Option<u32>,
+        nw_fr: Option<u32>,
+        nw_rr: Option<u32>,
+        // HCM edition, "7" (default) or "7.1".
+        version: Option<String>,
     ) -> Self {
         let mut inner = WeavingSegment::new();
 
@@ -106,9 +129,53 @@ impl WasmWeavingSegment {
         if let Some(v) = saf {
             inner.saf = v;
         }
+        if let Some(v) = nw_rf {
+            inner.nw_rf = v;
+        }
+        if let Some(v) = nw_fr {
+            inner.nw_fr = v;
+        }
+        if let Some(v) = nw_rr {
+            inner.nw_rr = v;
+        }
+        if let Some(v) = version {
+            // Unknown strings fall back to the 7th Edition default rather than trapping the
+            // whole constructor; use the `version` setter for validated assignment.
+            if let Ok(parsed) = v.parse::<HcmVersion>() {
+                inner.version = parsed;
+            }
+        }
 
         WasmWeavingSegment { inner }
     }
+
+    /// The HCM edition this segment analyzes under, "7" or "7.1".
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> String {
+        self.inner.version.to_string()
+    }
+
+    /// Set the HCM edition, "7" or "7.1". Throws on anything else.
+    #[wasm_bindgen(setter)]
+    pub fn set_version(&mut self, version: String) -> Result<(), JsValue> {
+        self.inner.version = version
+            .parse::<HcmVersion>()
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(())
+    }
+
+    /// Full Edition 7.1 analysis as a JS object (null until `run_analysis()` has run on a
+    /// version "7.1" segment). Fields follow the Rust `WeavingAnalysis` struct: class, flows,
+    /// ffs_adj, speed_basic, weaving_intensity, speed_impedance, speed_avg (null far past
+    /// capacity), capacity_per_lane, dc_ratio, density, los, and the rest.
+    pub fn analysis_v7_1(&self) -> Result<JsValue, JsValue> {
+        match &self.inner.analysis_v7_1 {
+            None => Ok(JsValue::NULL),
+            Some(a) => serde_wasm_bindgen::to_value(a)
+                .map_err(|e| JsValue::from_str(&format!("serialize error: {e}"))),
+        }
+    }
+
 
     /// Run the full HCM Ch.13 analysis (Steps 2-8) and return the LOS letter.
     /// Populates flows, capacity, lane-changing rates, speeds, and density.
@@ -118,47 +185,62 @@ impl WasmWeavingSegment {
     }
 
     /// Step 2: demand flows under equivalent ideal conditions (Eq. 13-1).
-    /// Returns [v_W, v_NW, v] in pc/h.
-    pub fn determine_demand_flow(&mut self) -> Vec<f64> {
+    /// Returns [v_W, v_NW, v] in pc/h. 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_demand_flow(&mut self) -> Result<Vec<f64>, JsValue> {
+        self.require_v7("determine_demand_flow")?;
         let (v_w, v_nw, v) = self.inner.determine_demand_flow();
-        vec![v_w, v_nw, v]
+        Ok(vec![v_w, v_nw, v])
     }
 
     /// Step 3: minimum lane-changing rate LC_MIN (lc/h) - Eqs. 13-2/13-3.
-    pub fn determine_configuration_characteristics(&mut self) -> f64 {
-        self.inner.determine_configuration_characteristics()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_configuration_characteristics(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_configuration_characteristics")?;
+        Ok(self.inner.determine_configuration_characteristics())
     }
 
     /// Step 4: maximum weaving length L_MAX (ft) - Eq. 13-4.
-    pub fn determine_max_weaving_length(&mut self) -> f64 {
-        self.inner.determine_max_weaving_length()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_max_weaving_length(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_max_weaving_length")?;
+        Ok(self.inner.determine_max_weaving_length())
     }
 
     /// Step 5: weaving segment capacity (veh/h) - Eqs. 13-5..13-10.
-    pub fn determine_capacity(&mut self) -> f64 {
-        self.inner.determine_capacity()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_capacity(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_capacity")?;
+        Ok(self.inner.determine_capacity())
     }
 
     /// Step 6: total lane-changing rate LC_ALL (lc/h) - Eqs. 13-11..13-17.
-    pub fn determine_lane_changing_rates(&mut self) -> f64 {
-        self.inner.determine_lane_changing_rates()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_lane_changing_rates(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_lane_changing_rates")?;
+        Ok(self.inner.determine_lane_changing_rates())
     }
 
     /// Step 7: speeds [S_W, S_NW, S] in mi/h - Eqs. 13-18..13-22.
-    pub fn estimate_speed(&mut self) -> Vec<f64> {
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn estimate_speed(&mut self) -> Result<Vec<f64>, JsValue> {
+        self.require_v7("estimate_speed")?;
         let (s_w, s_nw, s) = self.inner.estimate_speed();
-        vec![s_w, s_nw, s]
+        Ok(vec![s_w, s_nw, s])
     }
 
     /// Step 8a: density (pc/mi/ln) - Eq. 13-23.
-    pub fn determine_density(&mut self) -> f64 {
-        self.inner.determine_density()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_density(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_density")?;
+        Ok(self.inner.determine_density())
     }
 
     /// Step 8b: level of service letter - Exhibit 13-6.
-    pub fn determine_los(&mut self) -> String {
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_los(&mut self) -> Result<String, JsValue> {
+        self.require_v7("determine_los")?;
         let los: char = self.inner.determine_los().into();
-        los.to_string()
+        Ok(los.to_string())
     }
 
     pub fn get_flow_weaving(&self) -> f64 {
