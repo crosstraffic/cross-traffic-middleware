@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 — 2026-08
+
+HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
+
+### Added
+
+- **Selectable HCM edition on `WasmRampSegment`**, completing what 0.3.0 did for weaving. A `version` property ("7", default, or "7.1") and a trailing constructor argument. `run_analysis()` dispatches on the edition; `analysis_v7_1()` returns the full Edition 7.1 result as a JS object (null until an analysis has run), with `speed_avg` null when demand sits far past capacity and the speed equation loses physical meaning.
+
+### Changed
+
+- **The `WasmRampSegment` stepwise methods throw on a "7.1" segment** instead of silently returning 7th Edition numbers — Edition 7.1 has no lane-distribution model, so v_12 and the Exhibit 14-13 speeds do not exist there. The Rust signatures gain `Result` (breaking for direct Rust callers of the wasm wrapper, of which the only known one is the web calculator's re-export crate); JS behavior is unchanged for 7th Edition segments.
+
 ## 0.3.0 — 2026-08
 
 ### Added

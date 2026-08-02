@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+use transportations_library::common::HcmVersion;
 use transportations_library::merge_diverge::{
     AdjacentRampType, RampLanes, RampSegment, RampSide, RampType, TerrainType,
 };
@@ -15,6 +16,21 @@ fn parse_adjacent(s: &str) -> AdjacentRampType {
 #[derive(Debug, Clone)]
 pub struct WasmRampSegment {
     inner: RampSegment,
+}
+
+impl WasmRampSegment {
+    /// The stepwise methods implement the 7th Edition's numbered steps (lane distribution,
+    /// v_12, Exhibit 14-13 speeds), which Edition 7.1 replaced with a different structure.
+    /// They throw on a "7.1" segment rather than silently returning 7th Edition numbers.
+    fn require_v7(&self, method: &str) -> Result<(), JsValue> {
+        if self.inner.version == HcmVersion::V7_1 {
+            return Err(JsValue::from_str(&format!(
+                "{method}() implements the 7th Edition step structure, but this segment is \
+                 version \"7.1\". Use run_analysis() and analysis_v7_1() instead."
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
@@ -47,6 +63,9 @@ impl WasmRampSegment {
         downstream_ramp_flow: Option<f64>,
         caf: Option<f64>,
         saf: Option<f64>,
+        // HCM edition, "7" (default) or "7.1". Appended last so existing positional callers
+        // are unchanged.
+        version: Option<String>,
     ) -> Self {
         let mut inner = RampSegment::new();
 
@@ -137,8 +156,42 @@ impl WasmRampSegment {
         if let Some(v) = saf {
             inner.saf = v;
         }
+        if let Some(v) = version {
+            // Unknown strings fall back to the 7th Edition default rather than trapping the
+            // whole constructor; use the `version` setter for validated assignment.
+            if let Ok(parsed) = v.parse::<HcmVersion>() {
+                inner.version = parsed;
+            }
+        }
 
         WasmRampSegment { inner }
+    }
+
+    /// The HCM edition this segment analyzes under, "7" or "7.1".
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> String {
+        self.inner.version.to_string()
+    }
+
+    /// Set the HCM edition, "7" or "7.1". Throws on anything else.
+    #[wasm_bindgen(setter)]
+    pub fn set_version(&mut self, version: String) -> Result<(), JsValue> {
+        self.inner.version = version
+            .parse::<HcmVersion>()
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(())
+    }
+
+    /// Full Edition 7.1 analysis as a JS object (null until `run_analysis()` has run on a
+    /// version "7.1" segment). Fields follow the Rust `RampAnalysis` struct: flows, ffs_adj,
+    /// speed_basic, speed_impedance, speed_avg (null far past capacity), capacity_per_lane,
+    /// dc_ratio, the capacity checks, density, and los.
+    pub fn analysis_v7_1(&self) -> Result<JsValue, JsValue> {
+        match &self.inner.analysis_v7_1 {
+            None => Ok(JsValue::NULL),
+            Some(a) => serde_wasm_bindgen::to_value(a)
+                .map_err(|e| JsValue::from_str(&format!("serialize error: {e}"))),
+        }
     }
 
     /// Run the full HCM Ch.14 analysis (Steps 1-5) and return the LOS letter.
@@ -155,43 +208,55 @@ impl WasmRampSegment {
     }
 
     /// Step 1: demand flows [v_F, v_R] in pc/h - Eq. 14-1.
-    pub fn determine_demand_flow(&mut self) -> Vec<f64> {
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_demand_flow(&mut self) -> Result<Vec<f64>, JsValue> {
+        self.require_v7("determine_demand_flow")?;
         let (v_f, v_r) = self.inner.determine_demand_flow();
-        vec![v_f, v_r]
+        Ok(vec![v_f, v_r])
     }
 
     /// Step 2: flow in Lanes 1 and 2, v_12 (pc/h) - Eqs. 14-2..14-19.
-    pub fn estimate_v12(&mut self) -> f64 {
-        self.inner.estimate_v12()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn estimate_v12(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("estimate_v12")?;
+        Ok(self.inner.estimate_v12())
     }
 
     /// Step 3: adjusted freeway capacity (pc/h) and capacity checks
     /// (Exhibits 14-10/14-12, Eq. 14-21).
-    pub fn determine_capacity(&mut self) -> f64 {
-        self.inner.determine_capacity()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_capacity(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_capacity")?;
+        Ok(self.inner.determine_capacity())
     }
 
     /// Step 4: density in the ramp influence area (pc/mi/ln)
     /// - Eqs. 14-22/14-23/14-28.
-    pub fn determine_density(&mut self) -> f64 {
-        self.inner.determine_density()
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn determine_density(&mut self) -> Result<f64, JsValue> {
+        self.require_v7("determine_density")?;
+        Ok(self.inner.determine_density())
     }
 
     /// Level of service letter - Exhibit 14-3.
+    /// 7th Edition only; throws on a "7.1" segment.
     ///
     /// Returns `undefined` for a major merge under capacity; see [`Self::run_analysis`].
-    pub fn determine_los(&mut self) -> Option<String> {
-        self.inner.determine_los().map(|los| {
+    pub fn determine_los(&mut self) -> Result<Option<String>, JsValue> {
+        self.require_v7("determine_los")?;
+        Ok(self.inner.determine_los().map(|los| {
             let c: char = los.into();
             c.to_string()
-        })
+        }))
     }
 
     /// Step 5: speeds [S_R, S_O, S] in mi/h - Exhibits 14-13/14-14/14-15.
     /// S_O is NaN when the outer-lane speed does not apply.
-    pub fn estimate_speed(&mut self) -> Vec<f64> {
+    /// 7th Edition only; throws on a "7.1" segment.
+    pub fn estimate_speed(&mut self) -> Result<Vec<f64>, JsValue> {
+        self.require_v7("estimate_speed")?;
         let (s_r, s_o, s) = self.inner.estimate_speed();
-        vec![s_r, s_o.unwrap_or(f64::NAN), s]
+        Ok(vec![s_r, s_o.unwrap_or(f64::NAN), s])
     }
 
     pub fn get_flow_freeway(&self) -> f64 {
