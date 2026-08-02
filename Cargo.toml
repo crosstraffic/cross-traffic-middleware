@@ -1,6 +1,6 @@
 [package]
 name = "crosstraffic_middleware"
-version = "0.1.7"
+version = "0.2.0"
 authors = ["Rei Tamaru <tamaru@wisc.edu>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
