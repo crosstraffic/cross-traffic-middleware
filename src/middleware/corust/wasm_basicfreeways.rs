@@ -16,8 +16,10 @@ impl WasmBasicFreeways {
         bffs: Option<f64>,
         lane_width: Option<f64>,
         lane_count: Option<u32>,
-        lc_r: Option<u32>,
-        lc_l: Option<u32>,
+        // f64 because the Exhibit 12-21 note interpolates for noninteger right-side
+        // lateral clearance; JS numbers arrive as floats anyway.
+        lc_r: Option<f64>,
+        lc_l: Option<f64>,
         trd: Option<u32>,
         apd: Option<u32>,
         grade: Option<f64>,
