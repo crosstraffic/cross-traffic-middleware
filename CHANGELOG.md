@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-08
+
+### Added
+
+- **Selectable HCM edition on `WasmWeavingSegment`.** A `version` property ("7", default, or "7.1"), a trailing constructor argument, and the `nw_rf`/`nw_fr`/`nw_rr` weaving-lane counts the Edition 7.1 configuration weighting reads. `run_analysis()` dispatches on the edition; `analysis_v7_1()` returns the full Edition 7.1 result as a JS object (null until an analysis has run).
+
+### Breaking
+
+- **The `WasmWeavingSegment` stepwise methods throw on a "7.1" segment** instead of silently returning 7th Edition numbers — the editions disagree on speeds, capacities, and LOS bands. Rust signatures gain `Result`, hence the version bump; JS behavior is unchanged for 7th Edition segments.
+
 ## 0.2.0 — 2026-08
 
 Tracks transportations_library 0.3.0.
