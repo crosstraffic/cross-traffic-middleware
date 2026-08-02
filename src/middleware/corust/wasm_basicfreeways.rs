@@ -111,6 +111,19 @@ impl WasmBasicFreeways {
         self.inner.ffs
     }
 
+    /// Adjusted free-flow speed FFS_adj = FFS x SAF (mi/h), which the Equation 12-1 speed curve is
+    /// drawn against. Note the asymmetry: the breakpoint below follows this, while base capacity is
+    /// computed from the unadjusted FFS.
+    pub fn get_ffs_adj(&self) -> f64 {
+        self.inner.ffs_adj
+    }
+
+    /// Adjusted breakpoint BP_adj (pc/h/ln) - Exhibit 12-6, the flow at which the speed curve stops
+    /// being flat. Exposed so a caller can plot the curve without restating the exhibit's formula.
+    pub fn get_breakpoint(&self) -> f64 {
+        self.inner.breakpoint
+    }
+
     pub fn get_capacity(&self) -> f64 {
         self.inner.capacity
     }

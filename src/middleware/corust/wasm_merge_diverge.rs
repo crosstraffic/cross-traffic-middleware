@@ -143,9 +143,15 @@ impl WasmRampSegment {
 
     /// Run the full HCM Ch.14 analysis (Steps 1-5) and return the LOS letter.
     /// Populates flows, v_12, capacities, density, and speeds.
-    pub fn run_analysis(&mut self) -> String {
-        let los: char = self.inner.run_analysis().into();
-        los.to_string()
+    ///
+    /// Returns `undefined` for a major merge operating under capacity, where the HCM defines no
+    /// level of service and only the capacity checks apply. Callers must render that case rather
+    /// than printing an empty letter.
+    pub fn run_analysis(&mut self) -> Option<String> {
+        self.inner.run_analysis().map(|los| {
+            let c: char = los.into();
+            c.to_string()
+        })
     }
 
     /// Step 1: demand flows [v_F, v_R] in pc/h - Eq. 14-1.
@@ -172,9 +178,13 @@ impl WasmRampSegment {
     }
 
     /// Level of service letter - Exhibit 14-3.
-    pub fn determine_los(&mut self) -> String {
-        let los: char = self.inner.determine_los().into();
-        los.to_string()
+    ///
+    /// Returns `undefined` for a major merge under capacity; see [`Self::run_analysis`].
+    pub fn determine_los(&mut self) -> Option<String> {
+        self.inner.determine_los().map(|los| {
+            let c: char = los.into();
+            c.to_string()
+        })
     }
 
     /// Step 5: speeds [S_R, S_O, S] in mi/h - Exhibits 14-13/14-14/14-15.
