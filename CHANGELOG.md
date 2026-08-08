@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.1 — 2026-08
+## 0.3.2 — 2026-08
+
+### Added
+
+- **`WasmAlternativeIntersection`**: the HCM Ch.23 Part C RCUT/MUT operational analysis (Exhibit 23-47 Steps 6-10). The constructor takes a configuration object matching the library's `AlternativeIntersection` serde schema (form, movements with ordered junction journeys); results come back as per-movement Equation 23-60 ETT/LOS rows plus the Equation 23-61/23-62 approach and intersection aggregations, with intersection LOS from Exhibit 23-13.
+- **Part C helper functions**, exported as plain functions: `edtt_merge` (Equation 23-58) and `edtt_stop_or_signal` (Equation 23-59) so the UI can compute extra distance travel time from crossover geometry, `uturn_saturation_adjustment` (Exhibit 23-52), `stop_junction_delay` (the Chapter 20 gap-acceptance capacity/delay/queue bundle used at STOP-controlled crossovers), and `dlt_offset` (the DLT supplemental-intersection offset, Equations 23-63 through 23-68). Together with the existing `WasmDisplacedLeftTurn` (Equation 23-69) this completes the wasm surface for the Part C forms; the library implementations are validated against Chapter 34 Example Problems 12-16.
 
 HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
 

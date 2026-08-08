@@ -13,4 +13,5 @@ pub mod wasm_twsc;
 pub mod wasm_awsc;
 pub mod wasm_roundabouts;
 pub mod wasm_interchange;
+pub mod wasm_alternative_intersections;
 pub mod wasm_pedbike;
