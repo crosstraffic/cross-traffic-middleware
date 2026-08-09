@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.3 — 2026-08
+
+The urban streets bindings (Chapters 16, 17, and 18) could not express the inputs behind their own published example problems, so the boundary test suite documented several HCM answers as unreachable through wasm. This release closes those gaps. Every new constructor and method argument is trailing and optional, so existing positional JS calls keep their meaning and their results.
+
+### Added
+
+- **`WasmUrbanSegment`: all three access-point delay sources of Equation 18-7.** Nine trailing constructor arguments (`access_point_delays_s`, `n_influential_access_points`, `pct_left_turns_access`, `pct_right_turns_access`, `access_left_bay_adequate`, `access_right_bay_adequate`, `midsegment_other_delay_s`, `analysis_period_h`, `access_point_turn_delay_speed_mph`) plus an `add_access_point()` method taking one Chapter 30 Section 4 approach per call as a serde object. The binding previously forced the Exhibit 18-13 planning estimate with its built-in 10%/10% turn baseline, which put the Chapter 30 Example Problem 1 running time (33.54 s) and travel speed (23.67 mi/h) out of reach; both now reproduce, from the published Exhibit 30-35 per-point delays and from the Section 4 procedure computing them (0.193 and 0.194 s/veh, inside-lane blockage probability 0.115).
+- **`WasmUrbanSegment` Step 2 intermediates**, as getters and in `results_to_js_value()`: the speed constant S_0 and the f_CS, f_A, and f_pk adjustments of Exhibit 18-11, the signal spacing factor f_L of Equation 18-4, the proximity factor f_v of Equation 18-6, and `access_point_delays_computed()` for the per-point left/right/total delay and blockage-probability breakdown of Exhibit 30-35.
+- **`WasmUrbanFacility.add_segment`: the segment geometry the Chapter 18 free-flow speed depends on** — `upstream_intersection_width_ft`, `restrictive_median_length_ft`, `proportion_with_curb`, `proportion_on_street_parking`, `prop_opposing_left_accessible`, `signal_spacing_ft`, and `free_flow_speed_override_mph` — followed by the same nine access-point arguments as the segment constructor. A facility built from the Chapter 30 Example Problem 1 segment now reproduces the published base free-flow speed of 40.78 mi/h and travel speed of 23.67 mi/h instead of falling back to the Exhibit 18-5 defaults.
+- **`WasmUrbanFacility.add_segment_from_config()`**, taking one segment as a configuration object in the serde schema of the library's `UrbanSegment` — the same shape as the library fixture files, so a fixture segment loads verbatim in one call instead of through the 31-argument positional `add_segment` (which stays).
+- **`WasmUrbanFacility.add_segment_summary()` and `aggregate()`**, the Exhibit 16-7 "HCM method output" path. A segment can be given by its already-known length, base free-flow speed, travel speed, spatial stop rate, v/c ratio, and LOS letter, and `aggregate()` runs Chapter 16 Steps 1 through 4 over those measures without the Chapter 18 engine. This is how the published example problems are stated, and it makes Chapter 29 Example Problem 1 expressible (facility base free-flow speed 40.1 mi/h, LOS C, poorest segment LOS D). `analyze()` now throws rather than recompute a facility holding such a segment, because there are no Chapter 18 inputs behind one.
+- **`WasmUrbanReliability`: monthly snowfall, the calendar, and the boundary-signal delay parameters.** Trailing constructor arguments `monthly_total_snowfall_in` (the fifth monthly weather array, taking 0, 1, or 12 entries like the others), `jan1_day_of_week`, and the facility `prop_left_turn_lanes`; trailing `add_segment` arguments `k_factor`, `i_factor`, and `approach_lanes` for the Exhibit 19-14 incremental delay factor, the upstream filtering factor, and Σ N_n of Equation 29-27. Snowfall was hard-coded to zero, which silently removed the strongest weather events from the scenario stream; with the Lincoln climatology of Chapter 29 Example Problem 4 supplied, the wasm run now matches the library's own run of that fixture.
+- **`WasmUrbanReliability.add_atdm_strategy()`**, taking an `AtdmStrategy` serde object (every field defaults to no effect, so supply only what the strategy changes). This reaches the Chapter 17 Section 4 strategy, work zone, and special event hook, including Example Problem 5's reallocation of 5 s of split to the coordinated through phase and the Chapter 37 Section 5 adaptive signal control form.
+- **`WasmUrbanReliability.num_oversaturated_scenarios()`**, the count of scenarios in which a boundary through movement ran over capacity. These are the scenarios that carry a residual queue into the next analysis period, so the count says how much of the travel-time distribution's tail comes from oversaturation rather than from weather or incidents.
+
+HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
+
 ## 0.3.2 — 2026-08
 
 ### Added
@@ -8,6 +25,8 @@
 - **Part C helper functions**, exported as plain functions: `edtt_merge` (Equation 23-58) and `edtt_stop_or_signal` (Equation 23-59) so the UI can compute extra distance travel time from crossover geometry, `uturn_saturation_adjustment` (Exhibit 23-52), `stop_junction_delay` (the Chapter 20 gap-acceptance capacity/delay/queue bundle used at STOP-controlled crossovers), and `dlt_offset` (the DLT supplemental-intersection offset, Equations 23-63 through 23-68). Together with the existing `WasmDisplacedLeftTurn` (Equation 23-69) this completes the wasm surface for the Part C forms; the library implementations are validated against Chapter 34 Example Problems 12-16.
 
 HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
+
+## 0.3.1 — 2026-08
 
 ### Added
 

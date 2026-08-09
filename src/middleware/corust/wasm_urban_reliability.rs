@@ -4,7 +4,7 @@ use transportations_library::hcm::chapter17::exhibits::{
 };
 use transportations_library::urban_facilities::UrbanFacility;
 use transportations_library::urban_reliability::{
-    BoundarySignal, MonthlyWeather, UrbanReliability, UrbanReliabilityConfig,
+    AtdmStrategy, BoundarySignal, MonthlyWeather, UrbanReliability, UrbanReliabilityConfig,
 };
 use transportations_library::urban_segments::{BoundaryControlType, UrbanSegment};
 
@@ -31,6 +31,8 @@ fn parse_functional_class(class: &str) -> FunctionalClass {
 pub struct WasmUrbanReliability {
     config: UrbanReliabilityConfig,
     segments: Vec<UrbanSegment>,
+    prop_left_turn_lanes: Option<f64>,
+    atdm_strategies: Vec<AtdmStrategy>,
     inner: Option<UrbanReliability>,
 }
 
@@ -40,8 +42,11 @@ impl WasmUrbanReliability {
     /// Scope: a fully signalized urban street facility (every segment's
     /// downstream boundary intersection is a traffic signal), evaluated
     /// with the HCM default demand-ratio, weather, and incident models.
-    /// Each monthly weather array takes 0, 1, or 12 entries (none, one
-    /// value replicated to every month, or January-December values).
+    /// Each of the five monthly weather arrays takes 0, 1, or 12 entries
+    /// (none, one value replicated to every month, or January-December
+    /// values). Snowfall drives the strongest capacity and free-flow-speed
+    /// losses in the Chapter 29 weather model, so a facility in a
+    /// snow-affected climate needs its snowfall column supplied.
     #[wasm_bindgen(constructor)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -59,6 +64,9 @@ impl WasmUrbanReliability {
         weather_seed: Option<u32>,
         demand_seed: Option<u32>,
         incident_seed: Option<u32>,
+        monthly_total_snowfall_in: Option<Vec<f64>>,
+        jan1_day_of_week: Option<u32>,
+        prop_left_turn_lanes: Option<f64>,
     ) -> Self {
         let mut config = UrbanReliabilityConfig::default();
         if let Some(c) = functional_class {
@@ -71,10 +79,14 @@ impl WasmUrbanReliability {
         if let Some(v) = analysis_periods_per_day {
             config.analysis_periods_per_day = v as usize;
         }
+        if let Some(v) = jan1_day_of_week {
+            config.jan1_day_of_week = v.min(6);
+        }
+        let monthly_total_snowfall_in = monthly_total_snowfall_in.unwrap_or_default();
         config.weather = (0..12)
             .map(|i| MonthlyWeather {
                 total_precip_in: month_value(&monthly_total_precip_in, i),
-                total_snowfall_in: 0.0,
+                total_snowfall_in: month_value(&monthly_total_snowfall_in, i),
                 days_with_precip: month_value(&monthly_days_with_precip, i),
                 mean_temp_f: month_value(&monthly_mean_temp_f, i),
                 precip_rate_in_h: month_value(&monthly_precip_rate_in_h, i),
@@ -103,8 +115,34 @@ impl WasmUrbanReliability {
         WasmUrbanReliability {
             config,
             segments: Vec::new(),
+            prop_left_turn_lanes,
+            atdm_strategies: Vec::new(),
             inner: None,
         }
+    }
+
+    /// Register an ATDM strategy, work zone, or special event (HCM Chapter
+    /// 17, Section 4). Strategies are applied to every scenario matching
+    /// their schedule, as input-level adjustments to demand, saturation
+    /// flow, effective green, free-flow speed, and crash frequency.
+    ///
+    /// `strategy` is an object matching the serde schema of
+    /// `hcm::urban_reliability::AtdmStrategy`; every field has a
+    /// no-effect default, so supply only what the strategy changes. The
+    /// Chapter 29 Example Problem 5 Strategy 1 (5 s of split shifted to the
+    /// coordinated through phase) is:
+    ///
+    /// ```json
+    /// { "name": "EP5 Strategy 1", "effective_green_adjustment_s": 5.0 }
+    /// ```
+    ///
+    /// An empty `months` / `days_of_week` / `periods` list means always
+    /// active. Call before `run()`.
+    pub fn add_atdm_strategy(&mut self, strategy: JsValue) -> Result<(), JsValue> {
+        let strategy: AtdmStrategy = serde_wasm_bindgen::from_value(strategy)
+            .map_err(|e| JsValue::from_str(&format!("invalid ATDM strategy: {e}")))?;
+        self.atdm_strategies.push(strategy);
+        Ok(())
     }
 
     /// Append a signalized Chapter 18 segment (ordered upstream to
@@ -128,6 +166,9 @@ impl WasmUrbanReliability {
         full_stop_rate_override: Option<f64>,
         segment_crash_frequency: f64,
         intersection_crash_frequency: f64,
+        k_factor: Option<f64>,
+        i_factor: Option<f64>,
+        approach_lanes: Option<u32>,
     ) {
         let sat_flow = sat_flow_veh_h_ln.unwrap_or(1_800.0);
         let r_p = platoon_ratio.unwrap_or(1.0);
@@ -158,9 +199,13 @@ impl WasmUrbanReliability {
             effective_green_s,
             sat_flow_veh_h_ln: sat_flow,
             platoon_ratio: r_p,
-            k_factor: 0.5,
-            i_factor: 1.0,
-            approach_lanes: 0, // defaults to the segment's through lanes
+            // Exhibit 19-14: k = 0.50 for pretimed operation, lower for
+            // actuated phases; I = 1.0 for an isolated intersection.
+            k_factor: k_factor.unwrap_or(0.5),
+            i_factor: i_factor.unwrap_or(1.0),
+            // Σ N_n of Equation 29-27, all movements on the approach; 0
+            // falls back to the segment's through lanes.
+            approach_lanes: approach_lanes.unwrap_or(0),
         });
         self.config
             .incidents
@@ -177,8 +222,10 @@ impl WasmUrbanReliability {
     /// (weekdays), Chapter 16/18 evaluation of every scenario, and the
     /// travel time distribution summary.
     pub fn run(&mut self) -> Result<(), JsValue> {
-        let facility = UrbanFacility::new(self.segments.clone());
+        let mut facility = UrbanFacility::new(self.segments.clone());
+        facility.prop_left_turn_lanes = self.prop_left_turn_lanes;
         let mut analysis = UrbanReliability::new(facility, self.config.clone());
+        analysis.atdm_strategies = self.atdm_strategies.clone();
         analysis.run().map_err(|e| JsValue::from_str(&e))?;
         self.inner = Some(analysis);
         Ok(())
@@ -201,6 +248,17 @@ impl WasmUrbanReliability {
 
     pub fn num_incidents(&self) -> u32 {
         self.inner.as_ref().map_or(0, |a| a.incidents.len() as u32)
+    }
+
+    /// Scenarios in which at least one boundary through movement ran over
+    /// capacity (v/c > 1). These are the scenarios that feed the residual
+    /// queue forward into the next analysis period, so the count is the
+    /// readout for how much of the travel-time distribution's tail comes
+    /// from oversaturation rather than from weather or incidents alone.
+    pub fn num_oversaturated_scenarios(&self) -> u32 {
+        self.inner.as_ref().map_or(0, |a| {
+            a.scenario_results.iter().filter(|r| r.oversaturated).count() as u32
+        })
     }
 
     pub fn get_base_free_flow_travel_time(&self) -> Option<f64> {
@@ -253,6 +311,7 @@ impl WasmUrbanReliability {
         js_sys::Reflect::set(&obj, &JsValue::from_str("num_scenarios"), &JsValue::from(self.num_scenarios())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("num_weather_events"), &JsValue::from(self.num_weather_events())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("num_incidents"), &JsValue::from(self.num_incidents())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("num_oversaturated_scenarios"), &JsValue::from(self.num_oversaturated_scenarios())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("base_free_flow_travel_time"), &opt(self.get_base_free_flow_travel_time())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("mean_travel_time"), &opt(self.get_mean_travel_time())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("tti_mean"), &JsValue::from(self.tti_mean())).unwrap();
