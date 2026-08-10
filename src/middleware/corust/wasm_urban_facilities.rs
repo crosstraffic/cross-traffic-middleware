@@ -39,12 +39,14 @@ fn carries_measures(segment: &UrbanSegment) -> bool {
 #[derive(Debug, Clone)]
 pub struct WasmUrbanFacility {
     inner: UrbanFacility,
-    /// Number of segments that arrived carrying their own performance
-    /// measures, whether through [`WasmUrbanFacility::add_segment_summary`]
-    /// or as a config with output fields populated. Those describe a result
+    /// Per-segment record of whether the segment ARRIVED carrying its own
+    /// performance measures (through [`WasmUrbanFacility::add_segment_summary`]
+    /// or a config with output fields populated). Those describe a result
     /// instead of Chapter 18 inputs, so `analyze()` must refuse to run the
-    /// engine over them.
-    n_summary_segments: usize,
+    /// engine over them. Kept as arrival state, not derived from the segment
+    /// at call time, because after an `analyze()` every segment carries
+    /// computed measures and a derived check would wrongly refuse re-analysis.
+    arrived_with_measures: Vec<bool>,
 }
 
 #[wasm_bindgen]
@@ -56,7 +58,7 @@ impl WasmUrbanFacility {
         if prop_left_turn_lanes.is_some() {
             inner.prop_left_turn_lanes = prop_left_turn_lanes;
         }
-        WasmUrbanFacility { inner, n_summary_segments: 0 }
+        WasmUrbanFacility { inner, arrived_with_measures: Vec::new() }
     }
 
     /// Append a Chapter 18 segment (ordered upstream to downstream) to the
@@ -212,6 +214,7 @@ impl WasmUrbanFacility {
         if access_point_turn_delay_speed_mph.is_some() {
             segment.access_point_turn_delay_speed_mph = access_point_turn_delay_speed_mph;
         }
+        self.arrived_with_measures.push(false);
         self.inner.segments.push(segment);
     }
 
@@ -237,9 +240,7 @@ impl WasmUrbanFacility {
     pub fn add_segment_from_config(&mut self, config: JsValue) -> Result<(), JsValue> {
         let segment: UrbanSegment = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid urban segment configuration: {e}")))?;
-        if carries_measures(&segment) {
-            self.n_summary_segments += 1;
-        }
+        self.arrived_with_measures.push(carries_measures(&segment));
         self.inner.segments.push(segment);
         Ok(())
     }
@@ -289,8 +290,8 @@ impl WasmUrbanFacility {
         segment.spatial_stop_rate_stops_mi = spatial_stop_rate_stops_mi;
         segment.vc_ratio = vc_ratio;
         segment.los = los;
+        self.arrived_with_measures.push(true);
         self.inner.segments.push(segment);
-        self.n_summary_segments += 1;
         Ok(())
     }
 
@@ -323,12 +324,13 @@ impl WasmUrbanFacility {
     /// are placeholders — use `aggregate()` there, which also handles a
     /// facility mixing supplied measures with input-driven segments.
     pub fn analyze(&mut self) -> Result<String, JsValue> {
-        if self.n_summary_segments > 0 {
+        let n_summary = self.arrived_with_measures.iter().filter(|&&b| b).count();
+        if n_summary > 0 {
             return Err(JsValue::from_str(&format!(
                 "{} of {} segments were supplied with their performance measures, which carry no \
                  Chapter 18 inputs to recompute: call aggregate() instead, which evaluates any \
                  remaining input-driven segments before aggregating",
-                self.n_summary_segments,
+                n_summary,
                 self.inner.segments.len()
             )));
         }
