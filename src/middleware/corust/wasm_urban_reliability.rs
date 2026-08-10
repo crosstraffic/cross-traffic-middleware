@@ -44,9 +44,21 @@ impl WasmUrbanReliability {
     /// with the HCM default demand-ratio, weather, and incident models.
     /// Each of the five monthly weather arrays takes 0, 1, or 12 entries
     /// (none, one value replicated to every month, or January-December
-    /// values). Snowfall drives the strongest capacity and free-flow-speed
-    /// losses in the Chapter 29 weather model, so a facility in a
-    /// snow-affected climate needs its snowfall column supplied.
+    /// values).
+    ///
+    /// * `monthly_total_snowfall_in` — climatological metadata only, carried
+    ///   on the weather record but not read by the scenario generator. The
+    ///   Chapter 29 weather procedure decides rain versus snow from the
+    ///   sampled temperature (Equations 29-3 and 29-4) and sizes the snow
+    ///   event from the precipitation columns through the snow-to-rain depth
+    ///   ratio of Step 7, so a snow climate is expressed through
+    ///   `monthly_mean_temp_f`, `monthly_total_precip_in`, and
+    ///   `monthly_precip_rate_in_h`. Supplying or omitting this column does
+    ///   not change any result.
+    /// * `jan1_day_of_week` — 0 = Sunday through 6 = Saturday. This anchors
+    ///   the calendar the reliability reporting period is built on, so a
+    ///   wrong value shifts every Exhibit 17-6 day-of-week demand factor onto
+    ///   the wrong day. Values above 6 are rejected rather than clamped.
     #[wasm_bindgen(constructor)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -67,7 +79,7 @@ impl WasmUrbanReliability {
         monthly_total_snowfall_in: Option<Vec<f64>>,
         jan1_day_of_week: Option<u32>,
         prop_left_turn_lanes: Option<f64>,
-    ) -> Self {
+    ) -> Result<WasmUrbanReliability, JsValue> {
         let mut config = UrbanReliabilityConfig::default();
         if let Some(c) = functional_class {
             config.functional_class = parse_functional_class(&c);
@@ -80,7 +92,12 @@ impl WasmUrbanReliability {
             config.analysis_periods_per_day = v as usize;
         }
         if let Some(v) = jan1_day_of_week {
-            config.jan1_day_of_week = v.min(6);
+            if v > 6 {
+                return Err(JsValue::from_str(&format!(
+                    "jan1_day_of_week {v} is out of range: expected 0 = Sunday through 6 = Saturday"
+                )));
+            }
+            config.jan1_day_of_week = v;
         }
         let monthly_total_snowfall_in = monthly_total_snowfall_in.unwrap_or_default();
         config.weather = (0..12)
@@ -112,13 +129,13 @@ impl WasmUrbanReliability {
         if let Some(v) = incident_seed {
             config.incident_seed = v as u64;
         }
-        WasmUrbanReliability {
+        Ok(WasmUrbanReliability {
             config,
             segments: Vec::new(),
             prop_left_turn_lanes,
             atdm_strategies: Vec::new(),
             inner: None,
-        }
+        })
     }
 
     /// Register an ATDM strategy, work zone, or special event (HCM Chapter
@@ -250,11 +267,15 @@ impl WasmUrbanReliability {
         self.inner.as_ref().map_or(0, |a| a.incidents.len() as u32)
     }
 
-    /// Scenarios in which at least one boundary through movement ran over
-    /// capacity (v/c > 1). These are the scenarios that feed the residual
-    /// queue forward into the next analysis period, so the count is the
-    /// readout for how much of the travel-time distribution's tail comes
-    /// from oversaturation rather than from weather or incidents alone.
+    /// Scenarios flagged as oversaturated by the library, which marks a
+    /// scenario when at least one boundary through movement either ran over
+    /// capacity (v/c > 1) or began the analysis period with a residual queue
+    /// carried in from the previous one (Q_b > 0). The count therefore
+    /// includes undersaturated periods that inherited a queue, and it reads
+    /// as how much of the travel-time distribution's tail is queue-driven
+    /// rather than weather- or incident-driven. The two conditions are not
+    /// separable through this surface; the library collapses them into one
+    /// flag per scenario.
     pub fn num_oversaturated_scenarios(&self) -> u32 {
         self.inner.as_ref().map_or(0, |a| {
             a.scenario_results.iter().filter(|r| r.oversaturated).count() as u32

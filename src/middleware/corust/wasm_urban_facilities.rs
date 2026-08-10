@@ -22,13 +22,28 @@ fn parse_los(letter: &str) -> Result<LevelOfService, JsValue> {
     }
 }
 
+/// True when a segment already holds Chapter 18 output, meaning it describes
+/// a result rather than the inputs to one. `base_ffs_mph` and
+/// `travel_speed_mph` are what Chapter 16 Steps 1-4 actually read; the other
+/// three are included because a segment carrying any of them was populated
+/// from measures, not geometry.
+fn carries_measures(segment: &UrbanSegment) -> bool {
+    segment.base_ffs_mph.is_some()
+        || segment.travel_speed_mph.is_some()
+        || segment.spatial_stop_rate_stops_mi.is_some()
+        || segment.vc_ratio.is_some()
+        || segment.los.is_some()
+}
+
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct WasmUrbanFacility {
     inner: UrbanFacility,
-    /// Number of segments added through [`WasmUrbanFacility::add_segment_summary`].
-    /// Those carry published measures instead of Chapter 18 inputs, so
-    /// `analyze()` must refuse to run the engine over them.
+    /// Number of segments that arrived carrying their own performance
+    /// measures, whether through [`WasmUrbanFacility::add_segment_summary`]
+    /// or as a config with output fields populated. Those describe a result
+    /// instead of Chapter 18 inputs, so `analyze()` must refuse to run the
+    /// engine over them.
     n_summary_segments: usize,
 }
 
@@ -46,9 +61,37 @@ impl WasmUrbanFacility {
 
     /// Append a Chapter 18 segment (ordered upstream to downstream) to the
     /// facility in the subject direction of travel. Everything after
-    /// `control` is optional; the trailing arguments mirror
-    /// `WasmUrbanSegment`'s constructor, including the nine that select
-    /// among the three Equation 18-7 access-point delay sources.
+    /// `control` is optional.
+    ///
+    /// The trailing arguments are not in `WasmUrbanSegment`'s constructor
+    /// order. This one runs `n_access_points_subject`,
+    /// `n_access_points_opposing`, `midsegment_flow_veh_h`,
+    /// `through_capacity_veh_h`, `through_control_delay_s`, `cycle_length_s`,
+    /// `effective_green_s`, `platoon_ratio`, `sat_flow_veh_h_ln`,
+    /// `full_stop_rate_override`, then the free-flow-speed geometry
+    /// (`upstream_intersection_width_ft`, `restrictive_median_length_ft`,
+    /// `proportion_with_curb`, `proportion_on_street_parking`,
+    /// `prop_opposing_left_accessible`, `signal_spacing_ft`,
+    /// `free_flow_speed_override_mph`), and finally the nine access-point
+    /// delay arguments of Equation 18-7. Pass by position against this list,
+    /// not against the segment constructor.
+    ///
+    /// Six `UrbanSegment` fields have no argument here and are reachable only
+    /// through [`Self::add_segment_from_config`]: `arrival_type`,
+    /// `stopped_vehicles_veh_ln`, `queue2_veh_ln`, `queue3_veh_ln`,
+    /// `stop_rate_other`, and the per-segment `prop_left_turn_lanes` (the
+    /// facility-wide one is a constructor argument).
+    ///
+    /// * `analysis_period_h` — read only by the computed Chapter 30 Section 4
+    ///   access-point branch, which the segment enters only when
+    ///   `access_point_approaches` is populated. That field has no argument
+    ///   here, so on a segment added through this method the value is inert;
+    ///   reach the branch through [`Self::add_segment_from_config`], whose
+    ///   serde schema carries `access_point_approaches`.
+    /// * `access_point_turn_delay_speed_mph` — same branch, same condition.
+    ///   It overrides the posted speed limit in the right-turn delay term of
+    ///   the Section 4 procedure, and is likewise inert without
+    ///   `access_point_approaches`.
     #[allow(clippy::too_many_arguments)]
     pub fn add_segment(
         &mut self,
@@ -177,13 +220,26 @@ impl WasmUrbanFacility {
     /// own fixture files use (e.g. the `segments` entries of
     /// `tests/ExampleCases/hcm/UrbanFacilities/case3.json`), so a fixture
     /// segment is loadable verbatim in one call instead of through the
-    /// 31-argument positional [`Self::add_segment`]. Any omitted field keeps
-    /// the library default; unknown fields are ignored, so misspelling a
-    /// field name silently falls back to that default — prefer copying field
-    /// names from the fixture files.
+    /// 31-argument positional [`Self::add_segment`]. Five fields are
+    /// required and throw when omitted — `segment_length_ft`,
+    /// `n_through_lanes`, `speed_limit_mph`, `through_demand_veh_h`, and
+    /// `control`. Every other field has a serde default; unknown fields are
+    /// ignored, so misspelling a field name silently falls back to that
+    /// default — prefer copying field names from the fixture files.
+    ///
+    /// A config may also carry the computed output fields (`base_ffs_mph`,
+    /// `travel_speed_mph`, `spatial_stop_rate_stops_mi`, `vc_ratio`, `los`),
+    /// as a serialized post-analysis fixture does. Such a segment is counted
+    /// as a summary segment, exactly as if it had come through
+    /// [`Self::add_segment_summary`], because its measures are already
+    /// decided and re-running the Chapter 18 engine over the inputs beside
+    /// them would overwrite what the caller supplied.
     pub fn add_segment_from_config(&mut self, config: JsValue) -> Result<(), JsValue> {
         let segment: UrbanSegment = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid urban segment configuration: {e}")))?;
+        if carries_measures(&segment) {
+            self.n_summary_segments += 1;
+        }
         self.inner.segments.push(segment);
         Ok(())
     }
@@ -239,11 +295,21 @@ impl WasmUrbanFacility {
     }
 
     /// Run the Chapter 16 aggregation (Equations 16-2 through 16-4 and the
-    /// Exhibit 16-3 LOS) over the per-segment measures already held, without
-    /// re-running the Chapter 18 engine. Returns the facility LOS letter.
-    /// Use after [`Self::add_segment_summary`], or after `analyze()` to
-    /// re-aggregate.
+    /// Exhibit 16-3 LOS) over the per-segment measures already held. Returns
+    /// the facility LOS letter. Use after [`Self::add_segment_summary`], or
+    /// after `analyze()` to re-aggregate.
+    ///
+    /// This is also the entry point for a facility mixing the two kinds of
+    /// segment. Segments that arrived with their measures already set are
+    /// left exactly as supplied, and any segment still missing them is
+    /// evaluated with the Chapter 18 engine first, so the aggregation sees a
+    /// complete set either way.
     pub fn aggregate(&mut self) -> Result<String, JsValue> {
+        for segment in self.inner.segments.iter_mut() {
+            if !carries_measures(segment) {
+                segment.analyze();
+            }
+        }
         self.inner
             .aggregate()
             .map(|r| format!("{:?}", r.los))
@@ -253,13 +319,15 @@ impl WasmUrbanFacility {
     /// Run the full HCM Ch.16 pipeline: evaluate every segment with the
     /// Chapter 18 engine, then aggregate (Equations 16-2 through 16-4 and
     /// the Exhibit 16-3 LOS). Returns the facility LOS letter. Throws when
-    /// the facility holds a segment added through `add_segment_summary`,
-    /// whose Chapter 18 inputs are placeholders — use `aggregate()` there.
+    /// any segment arrived carrying its own measures, whose Chapter 18 inputs
+    /// are placeholders — use `aggregate()` there, which also handles a
+    /// facility mixing supplied measures with input-driven segments.
     pub fn analyze(&mut self) -> Result<String, JsValue> {
         if self.n_summary_segments > 0 {
             return Err(JsValue::from_str(&format!(
-                "{} of {} segments were added as published summaries, which carry no Chapter 18 \
-                 inputs to recompute: call aggregate() instead of analyze()",
+                "{} of {} segments were supplied with their performance measures, which carry no \
+                 Chapter 18 inputs to recompute: call aggregate() instead, which evaluates any \
+                 remaining input-driven segments before aggregating",
                 self.n_summary_segments,
                 self.inner.segments.len()
             )));

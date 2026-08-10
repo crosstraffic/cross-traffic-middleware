@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.4 — 2026-08
+
+A review of the 0.3.3 urban bindings found three ways a caller could get a wrong answer or no answer at all, and two documented claims that were not true of the code. Nothing published in 0.3.3 is removed; the constructor signature change below is invisible to JS callers passing valid input.
+
+### Fixed
+
+- **`WasmUrbanFacility.add_segment_from_config()` now counts a config carrying performance measures as a summary segment.** A config with any of `base_ffs_mph`, `travel_speed_mph`, `spatial_stop_rate_stops_mi`, `vc_ratio`, or `los` populated — the shape a serialized post-analysis fixture takes — used to slip past the `analyze()` guard that `add_segment_summary()` sets. `analyze()` would then run the Chapter 18 engine over the placeholder inputs sitting beside those measures and silently overwrite them. Such a segment now behaves like one added through `add_segment_summary()`: `analyze()` throws and `aggregate()` reports the supplied measures unchanged.
+- **`WasmUrbanFacility.aggregate()` evaluates input-driven segments before aggregating**, which gives a facility mixing the two kinds of segment a working path for the first time. Previously `analyze()` refused the facility and directed the caller to `aggregate()`, which then failed with "base free-flow speed not computed" on the segments that had never been evaluated. Segments arriving with measures are left exactly as supplied. The `analyze()` error message now says that `aggregate()` handles the mixed case.
+- **`WasmUrbanReliability`'s constructor rejects a `jan1_day_of_week` above 6** instead of clamping it to 6. The value anchors the calendar the reliability reporting period is built on, so clamping a mistaken 7 moved every Exhibit 17-6 day-of-week demand factor onto the wrong day with nothing to show for it. The Rust signature gains `Result<WasmUrbanReliability, JsValue>`, as the weaving and ramp stepwise methods did in 0.3.0 and 0.3.1; JS behavior is unchanged for values in 0 through 6.
+
+### Corrections
+
+- **The 0.3.3 note that snowfall "was hard-coded to zero, which silently removed the strongest weather events from the scenario stream" was wrong.** The library never reads `MonthlyWeather.total_snowfall_in`. The Chapter 29 weather procedure decides rain versus snow from the sampled temperature (Equations 29-3 and 29-4) and sizes the snow event from the precipitation columns through the snow-to-rain depth ratio of Step 7, so the snowfall column is climatological metadata that does not reach any computation. The `monthly_total_snowfall_in` argument stays, since removing a published argument would be breaking, and its doc now says it changes nothing. What actually brought the Chapter 29 Example Problem 4 wasm run onto the library's own numbers in 0.3.3 was `jan1_day_of_week`, `approach_lanes`, and `prop_left_turn_lanes`. Dropping the snowfall array from that run leaves the travel time indices bit-for-bit identical.
+- **`num_oversaturated_scenarios()` was described as counting scenarios that "feed the residual queue forward".** The library's predicate flags a scenario when a boundary through movement runs over capacity (v/c > 1) or when it begins the period with a queue carried in (Q_b > 0), so the count already includes undersaturated periods inheriting a queue. The two conditions are not separable through the binding, which sees only the collapsed per-scenario flag. The doc comment now states the predicate.
+
+HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
+
 ## 0.3.3 — 2026-08
 
 The urban streets bindings (Chapters 16, 17, and 18) could not express the inputs behind their own published example problems, so the boundary test suite documented several HCM answers as unreachable through wasm. This release closes those gaps. Every new constructor and method argument is trailing and optional, so existing positional JS calls keep their meaning and their results.
