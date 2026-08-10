@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 use transportations_library::twsc::{
-    MajorRightTurnConfig, MinorLaneConfig, Mv, Twsc, TwscDemand, TwscGeometry, TwscLaneResult,
-    UTurnMedianWidth, ALL_MOVEMENTS,
+    ConflictingFlowOverride, MajorRightTurnConfig, MinorLaneConfig, Mv, Twsc, TwscDemand,
+    TwscGeometry, TwscLaneResult, UTurnMedianWidth, ALL_MOVEMENTS,
 };
 
 /// HCM Exhibit 20-1 movement labels in the internal computation order.
@@ -236,6 +236,49 @@ impl WasmTwsc {
             inner.heavy_vehicle_pct = v;
         }
         Ok(WasmTwsc { inner })
+    }
+
+    /// Override a conflicting flow rate v_c,x, veh/h, before `analyze()`.
+    ///
+    /// `movement` is an Exhibit 20-1 label ("1", "1U", ..., "12") and
+    /// `stage` is "total", "stage1", or "stage2". Setting either stage
+    /// refreshes the one-stage total as the sum of the two stages; setting
+    /// "total" leaves the stages alone. The HCM text below Exhibits 20-8
+    /// through 20-16 allows the conflicting-flow factors to be modified
+    /// from field data, which is what this is for. Overrides accumulate, so
+    /// calling twice for the same movement and stage leaves the later value
+    /// in force.
+    pub fn add_conflicting_flow_override(
+        &mut self,
+        movement: &str,
+        stage: &str,
+        value: f64,
+    ) -> Result<(), JsValue> {
+        // Reject the label here rather than letting the core silently drop an
+        // unrecognized override during Step 3.
+        parse_movement(movement)?;
+        match stage.to_lowercase().as_str() {
+            "total" | "stage1" | "stage2" => {}
+            other => {
+                return Err(JsValue::from_str(&format!(
+                    "conflicting-flow override stage must be total, stage1, or stage2, got {other}"
+                )))
+            }
+        }
+        self.inner
+            .conflicting_flow_overrides
+            .push(ConflictingFlowOverride {
+                movement: movement.to_string(),
+                stage: stage.to_lowercase(),
+                value,
+            });
+        Ok(())
+    }
+
+    /// Drop every conflicting-flow override added so far, returning the
+    /// intersection to the Step 3 exhibit factors.
+    pub fn clear_conflicting_flow_overrides(&mut self) {
+        self.inner.conflicting_flow_overrides.clear();
     }
 
     /// Run the complete HCM Chapter 20 procedure (Steps 1-13).
