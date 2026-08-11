@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 use transportations_library::hcm::chapter10::freeway_facilities::{FacilitySegment, FreewayFacility, SegmentType, Terrain};
 use transportations_library::hcm::chapter10::managed_lanes::{CrossWeave, ManagedLaneFacility, MlSegmentInput};
 use transportations_library::hcm::chapter10::planning::{PlanningFacility, PlanningSection, PlanningSectionType};
+use transportations_library::hcm::chapter10::WorkZone;
 use transportations_library::hcm::common::CityType;
 
 pub(crate) fn parse_terrain(s: &str) -> Terrain {
@@ -116,6 +117,76 @@ impl WasmFacilitySegment {
 
     pub fn get_lanes(&self) -> u32 {
         self.inner.lanes
+    }
+
+    /// Place a work zone on this segment (HCM Chapter 10, Section 4; Equations
+    /// 10-7 through 10-12), from a configuration object matching the serde
+    /// schema of the library's `WorkZone` — the shape of the library's own
+    /// fixtures, so the `work_zone` object of
+    /// `tests/ExampleCases/hcm/FreewayFacilities/case4.json` (Example Problem
+    /// 4) passes verbatim:
+    ///
+    /// ```json
+    /// {
+    ///   "total_lanes": 3, "open_lanes": 2,
+    ///   "soft_barrier": true, "rural": false,
+    ///   "lateral_distance_ft": 0.0, "night": false,
+    ///   "speed_ratio": 1.0909090909090908, "speed_limit_mi_h": 55.0,
+    ///   "total_ramp_density": 1.0, "queue_discharge_drop": 0.131
+    /// }
+    /// ```
+    ///
+    /// The work zone is a structured input with eleven fields, all of which
+    /// enter Equations 10-7 through 10-12, so it arrives as a config object
+    /// rather than as eleven more trailing constructor arguments, the same
+    /// choice `WasmManagedLaneFacility` makes for the other Chapter 10 input
+    /// that has no home on a segment. This is a setter rather than an
+    /// eighteenth constructor argument so that the seventeen-argument
+    /// constructor every existing caller uses keeps its exact signature.
+    ///
+    /// Every field has a serde default and unknown fields are ignored, so a
+    /// misspelled field name falls back to its default rather than throwing —
+    /// prefer copying names from the fixture files. The defaults describe a
+    /// three-to-two urban daylight closure behind a hard barrier, which is not
+    /// a no-op: calling this with `{}` places a real work zone.
+    pub fn set_work_zone(&mut self, config: JsValue) -> Result<(), JsValue> {
+        let wz: WorkZone = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid work zone configuration: {e}")))?;
+        self.inner.work_zone = Some(wz);
+        Ok(())
+    }
+
+    /// Remove the work zone from this segment, restoring unadjusted capacity
+    /// and free-flow speed.
+    pub fn clear_work_zone(&mut self) {
+        self.inner.work_zone = None;
+    }
+
+    pub fn has_work_zone(&self) -> bool {
+        self.inner.work_zone.is_some()
+    }
+
+    /// Equation 10-7 lane closure severity index, or undefined with no work
+    /// zone. `LCSI = 1 / (OR x N_o)`, capped at 2.0 (Exhibit 10-15).
+    pub fn work_zone_lcsi(&self) -> Option<f64> {
+        self.inner.work_zone.as_ref().map(|wz| wz.lcsi())
+    }
+
+    /// Equation 10-11 work zone capacity adjustment factor, or undefined with
+    /// no work zone. `non_wz_capacity_pc` is the non-work-zone per-lane
+    /// capacity in pc/h/ln, which the facility supplies from Equation 12-6 at
+    /// the segment's unadjusted FFS when it runs the analysis; pass it here to
+    /// read the factor on its own (2,300 pc/h/ln at the FFS 60 of Example
+    /// Problem 4, giving CAF_wz = 0.892).
+    pub fn work_zone_caf(&self, non_wz_capacity_pc: f64) -> Option<f64> {
+        self.inner.work_zone.as_ref().map(|wz| wz.caf(non_wz_capacity_pc))
+    }
+
+    /// Equation 10-12 work zone speed adjustment factor, or undefined with no
+    /// work zone. `non_wz_ffs` is the segment free-flow speed in mi/h (60 in
+    /// Example Problem 4, giving SAF_wz = 0.982).
+    pub fn work_zone_saf(&self, non_wz_ffs: f64) -> Option<f64> {
+        self.inner.work_zone.as_ref().map(|wz| wz.saf(non_wz_ffs))
     }
 }
 
@@ -250,6 +321,18 @@ impl WasmFreewayFacility {
         self.inner.dc_ratio.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
     }
 
+    /// Segment capacity, veh/h (Exhibits 25-63 and 25-71). This is the
+    /// denominator of `get_dc_ratio()` and it varies by period, both because a
+    /// weaving segment's capacity follows the period's weaving pattern and
+    /// because the Step A-8 adjustments are per period. Where a work zone is
+    /// placed this is the post-CAF_wz value, not the Step A-7 lane-closure
+    /// capacity the exhibit prints: Exhibit 25-71 prints 4,499 veh/h for the
+    /// Example Problem 4 work zone segment, and the Exhibit 25-72 d/c ratios
+    /// of the same problem only reproduce against 4,499 x 0.892.
+    pub fn get_capacity(&self, seg: usize, period: usize) -> f64 {
+        self.inner.capacity.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
     /// Volume served v_a, veh/h (Exhibit 25-48/25-56). This equals the
     /// segment demand only while the facility is undersaturated. Once a
     /// queue forms the oversaturated engine meters what the segment can
@@ -315,6 +398,12 @@ impl WasmFreewayFacility {
 
     pub fn dc_matrix(&self) -> JsValue {
         serde_wasm_bindgen::to_value(&self.inner.dc_ratio).unwrap_or(JsValue::NULL)
+    }
+
+    /// Segment capacity `[segment][period]`, veh/h (Exhibits 25-63, 25-71).
+    /// See `get_capacity()` for what a work zone segment holds here.
+    pub fn capacity_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.capacity).unwrap_or(JsValue::NULL)
     }
 
     pub fn los_matrix(&self) -> JsValue {
