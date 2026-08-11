@@ -314,6 +314,10 @@ impl WasmSegment {
 #[derive(Debug, Clone)]
 pub struct WasmTwoLaneHighways{
     inner: TwoLaneHighways,
+    // Step 9 records the effective downstream length of a passing lane on the
+    // facility and later segments are measured against it, so the constructor's
+    // value is kept to restore that state in `determine_facility_follower_density`.
+    initial_l_de: Option<f64>,
 }
 
 #[wasm_bindgen]
@@ -343,13 +347,14 @@ impl WasmTwoLaneHighways {
 
         WasmTwoLaneHighways {
             inner: TwoLaneHighways::new(
-                segments, 
-                lane_width, 
-                shoulder_width, 
-                apd, 
-                pmhvfl, 
+                segments,
+                lane_width,
+                shoulder_width,
+                apd,
+                pmhvfl,
                 l_de
             ),
+            initial_l_de: l_de,
         }
     }
 
@@ -457,6 +462,41 @@ impl WasmTwoLaneHighways {
 
     pub fn determine_segment_los(&self, seg_num: usize, s_pl: f64, cap: i32) -> char {
         self.inner.determine_segment_los(seg_num, s_pl, cap)
+    }
+
+    /// Step 11: length-weighted facility follower density, followers/mi/ln
+    /// (Equation 15-39). Feed the result to `determine_facility_los`.
+    ///
+    /// Equation 15-39 defines FD_i as the "follower density, or adjusted
+    /// follower density, for segment i", so the term a segment contributes is
+    /// not always the `fd` that `segs_to_js_value` reports. A passing lane
+    /// contributes its midpoint density FD_PLmid, a segment lying within the
+    /// effective downstream length of an upstream passing lane contributes its
+    /// Step 9 adjusted density, and only the remaining segments contribute the
+    /// plain Step 8 density. Reweighting the `fd` column caller-side discards
+    /// the Step 9 benefit, which is most of what Chapter 26 Example Problem 3
+    /// is spent computing, and on that example it returns 8.041 and LOS D
+    /// against the published 7.3 and LOS C.
+    ///
+    /// Steps 1 through 8 must already have run over every segment, since this
+    /// reads their stored speeds, percent followers, and densities.
+    ///
+    /// The core walks the segments in order, because the effective downstream
+    /// length of a passing lane is recorded when the walk reaches that passing
+    /// lane and every later segment is measured against it. That recorded
+    /// length is facility state, so a caller that has already run its own
+    /// per-segment `determine_adjustment_to_follower_density` loop, as the
+    /// calculator does to fill the FD-adjustment column, leaves it set and the
+    /// walk would then find it already populated on the segments *upstream* of
+    /// the passing lane, whose distance from that lane is zero. Those segments
+    /// would take an adjustment they should not have. This binding therefore
+    /// restores the constructor's `l_de` before delegating, so the result
+    /// depends only on Steps 1 through 8 and not on what else has been called.
+    /// On Chapter 26 Example Problem 4, whose passing lane is the fifth of six
+    /// segments, the difference is 19.897 against 14.936.
+    pub fn determine_facility_follower_density(&mut self) -> f64 {
+        self.inner.l_de = self.initial_l_de;
+        self.inner.determine_facility_follower_density()
     }
 
     pub fn determine_facility_los(&self, fd: f64, s_pl: f64) -> char {
