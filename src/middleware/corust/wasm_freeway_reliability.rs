@@ -1,6 +1,8 @@
 use wasm_bindgen::prelude::*;
 use transportations_library::hcm::chapter11::reliability::ReliabilityAnalysis;
-use transportations_library::hcm::chapter11::scenario_generation::{IncidentInputs, Weekday};
+use transportations_library::hcm::chapter11::scenario_generation::{
+    FreewayScenario, IncidentInputs, Weekday,
+};
 
 use super::wasm_freeway_facilities::{build_facility, WasmFacilitySegment};
 
@@ -102,6 +104,20 @@ impl WasmFreewayReliability {
         self.inner.run().map_err(|e| JsValue::from_str(&e))
     }
 
+    /// Seed-file VMT over the whole study period, veh-mi (Equation 25-88).
+    /// This is the denominator the incident frequencies of Equation 25-77
+    /// are built on, so it is available before `run()` and does not depend
+    /// on the Monte Carlo draw.
+    pub fn seed_total_vmt(&self) -> f64 {
+        self.inner.seed_statistics().total_vmt()
+    }
+
+    /// Number of 15-min analysis periods in the seed file, i.e. the study
+    /// period length D_SP in quarter hours.
+    pub fn seed_num_periods(&self) -> usize {
+        self.inner.seed_statistics().num_periods
+    }
+
     pub fn num_scenarios(&self) -> usize {
         self.inner.scenario_results.len()
     }
@@ -157,6 +173,60 @@ impl WasmFreewayReliability {
             .collect()
     }
 
+    /// Month of year (1-12) of each scenario's demand combination. Empty
+    /// before `run()`. This and the four vectors below share the ordering of
+    /// `scenario_probabilities()` and `scenario_tti_matrix()`, so a scenario
+    /// is identified by its index across all of them.
+    pub fn scenario_months(&self) -> Vec<u32> {
+        self.scenarios().iter().map(|sc| sc.month).collect()
+    }
+
+    /// Day of week of each scenario, as the English weekday name.
+    pub fn scenario_weekdays(&self) -> Vec<String> {
+        self.scenarios()
+            .iter()
+            .map(|sc| format!("{:?}", sc.weekday))
+            .collect()
+    }
+
+    /// Demand adjustment factor DAF_s of each scenario (Equation 25-72),
+    /// the scenario's demand multiplier over the seed date's. The seed-date
+    /// scenario therefore has DAF = 1 by construction.
+    pub fn scenario_dafs(&self) -> Vec<f64> {
+        self.scenarios().iter().map(|sc| sc.daf).collect()
+    }
+
+    /// Number of incidents assigned to each scenario. Scenarios with zero
+    /// incidents differ from the seed only through demand, which is what
+    /// makes them comparable against a plain Chapter 10 run.
+    pub fn scenario_incident_counts(&self) -> Vec<u32> {
+        self.scenarios()
+            .iter()
+            .map(|sc| sc.incidents.len() as u32)
+            .collect()
+    }
+
+    /// Expected incident frequency n_j per study period by month, indexed
+    /// January = 0 (Equation 25-77). Months outside the reliability
+    /// reporting period read zero. Empty before `run()`.
+    pub fn monthly_incident_frequencies(&self) -> Vec<f64> {
+        self.inner
+            .scenario_set
+            .as_ref()
+            .map(|s| s.monthly_incident_frequency.clone())
+            .unwrap_or_default()
+    }
+
+    /// Total incidents generated across the whole scenario set. The count
+    /// is a draw, not the expectation, so it moves with the rng seed.
+    pub fn total_incidents(&self) -> usize {
+        self.inner
+            .scenario_set
+            .as_ref()
+            .map(|s| s.total_incidents)
+            .unwrap_or(0)
+    }
+
     /// Per-scenario TTI matrix [scenario][period].
     pub fn scenario_tti_matrix(&self) -> JsValue {
         let tti: Vec<Vec<f64>> = self
@@ -181,7 +251,18 @@ impl WasmFreewayReliability {
         js_sys::Reflect::set(&obj, &JsValue::from_str("reliability_rating"), &JsValue::from(self.reliability_rating())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("semi_std_dev"), &JsValue::from(self.semi_std_dev())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("expected_vhd"), &JsValue::from(self.expected_vhd())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("total_incidents"), &JsValue::from(self.total_incidents() as u32)).unwrap();
 
         JsValue::from(obj)
+    }
+}
+
+impl WasmFreewayReliability {
+    fn scenarios(&self) -> &[FreewayScenario] {
+        self.inner
+            .scenario_set
+            .as_ref()
+            .map(|s| s.scenarios.as_slice())
+            .unwrap_or(&[])
     }
 }

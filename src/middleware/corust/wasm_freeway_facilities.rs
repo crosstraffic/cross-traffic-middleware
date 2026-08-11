@@ -248,6 +248,16 @@ impl WasmFreewayFacility {
         self.inner.dc_ratio.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
     }
 
+    /// Volume served v_a, veh/h (Exhibit 25-48/25-56). This equals the
+    /// segment demand only while the facility is undersaturated. Once a
+    /// queue forms the oversaturated engine meters what the segment can
+    /// actually discharge, so volume served and demand diverge, and it is
+    /// volume served that the speed and density of the period are computed
+    /// from.
+    pub fn get_volume_served(&self, seg: usize, period: usize) -> f64 {
+        self.inner.volume_served.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
     pub fn get_queue_length_ft(&self, seg: usize, period: usize) -> f64 {
         self.inner.queue_length_ft.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
     }
@@ -311,6 +321,20 @@ impl WasmFreewayFacility {
 
     pub fn queue_matrix(&self) -> JsValue {
         serde_wasm_bindgen::to_value(&self.inner.queue_length_ft).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn volume_served_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.volume_served).unwrap_or(JsValue::NULL)
+    }
+
+    /// Demand-based segment LOS `[segment][period]` (Exhibit 25-59, lower
+    /// table): "F" where vd/c > 1.0, undefined otherwise. The density-based
+    /// `los_matrix()` above reports what the segment delivered at the volume
+    /// it served, which can stay at D or E through a period whose demand
+    /// exceeded capacity; the demand-based table is where that excess shows
+    /// up, so the two are reported side by side rather than merged.
+    pub fn demand_based_los_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.demand_based_los).unwrap_or(JsValue::NULL)
     }
 
     pub fn results_to_js_value(&self) -> JsValue {
@@ -438,6 +462,21 @@ impl WasmPlanningFacility {
             .unwrap_or(0.0)
     }
 
+    /// Section delay rate ΔR, s/mi (Exhibit 25-92). Only the undersaturated
+    /// term ΔRU of Equation 25-47 is reported, evaluated at the actual d/c
+    /// even above 1.0; the library reproduces the worked Example Problem 6
+    /// rather than the ΔRU + ΔRO form of Equation 25-49, and expresses
+    /// oversaturation through the vertical queue instead (see the VERIFY-HCM
+    /// note in the library's `planning.rs`).
+    pub fn get_delay_rate(&self, section: usize, period: usize) -> f64 {
+        self.inner
+            .section_results
+            .get(section)
+            .and_then(|r| r.get(period))
+            .map(|r| r.delay_rate)
+            .unwrap_or(0.0)
+    }
+
     pub fn get_section_speed(&self, section: usize, period: usize) -> f64 {
         self.inner
             .section_results
@@ -480,6 +519,18 @@ impl WasmPlanningFacility {
             .unwrap_or_else(|| "-".to_string())
     }
 
+    /// Total vertical-queue length across all sections at the end of the
+    /// period, mi (Exhibit 25-96). This is the planning method's only
+    /// account of oversaturation, since its delay and travel rates leave
+    /// the ΔRO term out (see `get_delay_rate`).
+    pub fn get_facility_queue_mi(&self, period: usize) -> f64 {
+        self.inner
+            .facility_results
+            .get(period)
+            .map(|r| r.total_queue_mi)
+            .unwrap_or(0.0)
+    }
+
     pub fn results_to_js_value(&self) -> JsValue {
         let periods = self.inner.facility_results.len();
         let speed: Vec<f64> = (0..periods).map(|p| self.get_facility_speed(p)).collect();
@@ -487,6 +538,7 @@ impl WasmPlanningFacility {
         let los: Vec<String> = (0..periods).map(|p| self.get_facility_los(p)).collect();
         let travel_time_min: Vec<f64> = self.inner.facility_results.iter().map(|r| r.travel_time_min).collect();
         let oversaturated: Vec<bool> = self.inner.facility_results.iter().map(|r| r.oversaturated).collect();
+        let total_queue_mi: Vec<f64> = self.inner.facility_results.iter().map(|r| r.total_queue_mi).collect();
 
         let obj = js_sys::Object::new();
         js_sys::Reflect::set(&obj, &JsValue::from_str("num_sections"), &JsValue::from(self.num_sections() as u32)).unwrap();
@@ -496,6 +548,7 @@ impl WasmPlanningFacility {
         js_sys::Reflect::set(&obj, &JsValue::from_str("facility_los"), &serde_wasm_bindgen::to_value(&los).unwrap_or(JsValue::NULL)).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("travel_time_min"), &serde_wasm_bindgen::to_value(&travel_time_min).unwrap_or(JsValue::NULL)).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("oversaturated"), &serde_wasm_bindgen::to_value(&oversaturated).unwrap_or(JsValue::NULL)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("total_queue_mi"), &serde_wasm_bindgen::to_value(&total_queue_mi).unwrap_or(JsValue::NULL)).unwrap();
 
         JsValue::from(obj)
     }

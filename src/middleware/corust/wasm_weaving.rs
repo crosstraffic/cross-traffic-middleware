@@ -271,12 +271,43 @@ impl WasmWeavingSegment {
         self.inner.is_weaving_segment()
     }
 
+    /// Per-lane capacity from the density criterion c_IWL, pc/h/ln
+    /// (Equation 13-5). This is the base freeway capacity discounted for
+    /// the volume ratio, the number of weaving lanes, and the short length,
+    /// before Equation 13-6 scales it to prevailing conditions.
+    pub fn get_c_iwl(&self) -> f64 {
+        self.inner.c_iwl.unwrap_or(0.0)
+    }
+
     pub fn get_capacity(&self) -> f64 {
         self.inner.get_capacity()
     }
 
+    /// Capacity from the weaving-flow criterion, veh/h (Equations 13-7 and
+    /// 13-8): the maximum weaving flow the configuration can carry (2,400
+    /// pc/h with two weaving lanes, 3,500 with three) divided by the volume
+    /// ratio. Undefined on a two-sided segment, where N_WL is zero and that
+    /// criterion does not apply, so Equation 13-6 governs alone.
+    pub fn get_capacity_weaving(&self) -> Option<f64> {
+        self.inner.capacity_weaving
+    }
+
     pub fn get_vc_ratio(&self) -> f64 {
         self.inner.get_vc_ratio()
+    }
+
+    /// Lane-changing rate of weaving vehicles LC_W, lc/h (Equation 13-11).
+    pub fn get_lc_w(&self) -> f64 {
+        self.inner.lc_w.unwrap_or(0.0)
+    }
+
+    /// Lane-changing rate of nonweaving vehicles LC_NW, lc/h (Equation
+    /// 13-16). The two components are exposed separately because they carry
+    /// the configuration's cost differently: LC_W follows the short length
+    /// and the number of lanes, while LC_NW switches between the Equation
+    /// 13-12 and 13-13 branches on the nonweaving intensity I_NW.
+    pub fn get_lc_nw(&self) -> f64 {
+        self.inner.lc_nw.unwrap_or(0.0)
     }
 
     pub fn get_lc_all(&self) -> f64 {
@@ -315,8 +346,12 @@ impl WasmWeavingSegment {
         js_sys::Reflect::set(&obj, &JsValue::from_str("lc_min"), &JsValue::from(self.get_lc_min())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("l_max"), &JsValue::from(self.get_l_max())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("is_weaving"), &JsValue::from(self.is_weaving())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("c_iwl"), &JsValue::from(self.get_c_iwl())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from(self.get_capacity())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("capacity_weaving"), &self.get_capacity_weaving().map(JsValue::from).unwrap_or(JsValue::NULL)).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("vc_ratio"), &JsValue::from(self.get_vc_ratio())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("lc_w"), &JsValue::from(self.get_lc_w())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("lc_nw"), &JsValue::from(self.get_lc_nw())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("lc_all"), &JsValue::from(self.get_lc_all())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("speed_weaving"), &JsValue::from(self.get_speed_weaving())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("speed_nonweaving"), &JsValue::from(self.get_speed_nonweaving())).unwrap();

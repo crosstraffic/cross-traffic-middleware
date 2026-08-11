@@ -146,6 +146,15 @@ impl WasmBasicFreeways {
         self.inner.vc_ratio
     }
 
+    /// Demand flow rate v_p under equivalent base conditions, pc/h/ln
+    /// (Equation 12-9). This is the abscissa of the Exhibit 12-6 speed-flow
+    /// curve, so it is what the breakpoint and capacity above are compared
+    /// against, not the veh/h demand handed to the constructor. 0.0 before
+    /// the analysis has run.
+    pub fn get_demand_volume(&self) -> f64 {
+        self.inner.v_p
+    }
+
     pub fn get_lane_count(&self) -> u32 {
         self.inner.lane_count
     }
@@ -166,6 +175,7 @@ impl WasmBasicFreeways {
         js_sys::Reflect::set(&obj, &JsValue::from_str("density"), &JsValue::from(self.get_density())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("vc_ratio"), &JsValue::from(self.get_vc_ratio())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("e_t"), &JsValue::from(self.get_e_t())).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("demand_volume"), &JsValue::from(self.get_demand_volume())).unwrap();
 
         JsValue::from(obj)
     }
