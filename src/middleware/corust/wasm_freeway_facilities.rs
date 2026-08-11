@@ -1,5 +1,7 @@
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use transportations_library::hcm::chapter10::freeway_facilities::{FacilitySegment, FreewayFacility, SegmentType, Terrain};
+use transportations_library::hcm::chapter10::managed_lanes::{CrossWeave, ManagedLaneFacility, MlSegmentInput};
 use transportations_library::hcm::chapter10::planning::{PlanningFacility, PlanningSection, PlanningSectionType};
 use transportations_library::hcm::common::CityType;
 
@@ -172,7 +174,7 @@ pub(crate) fn build_facility(
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct WasmFreewayFacility {
-    inner: FreewayFacility,
+    pub(crate) inner: FreewayFacility,
 }
 
 #[wasm_bindgen]
@@ -353,6 +355,282 @@ impl WasmFreewayFacility {
         js_sys::Reflect::set(&obj, &JsValue::from_str("facility_los"), &serde_wasm_bindgen::to_value(&facility_los).unwrap_or(JsValue::NULL)).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("overall_speed"), &JsValue::from(self.get_overall_speed())).unwrap();
         js_sys::Reflect::set(&obj, &JsValue::from_str("overall_density_veh"), &JsValue::from(self.get_overall_density_veh())).unwrap();
+
+        JsValue::from(obj)
+    }
+}
+
+/// The managed-lane half of a [`WasmManagedLaneFacility`] built through
+/// [`WasmManagedLaneFacility::from_gp`]: the fields of the core's
+/// `ManagedLaneFacility` other than `gp`, so the general-purpose lane group
+/// can arrive through the positional [`WasmFreewayFacility`] constructor the
+/// Chapter 10 callers already use instead of being restated as JSON.
+#[derive(Deserialize)]
+struct MlConfig {
+    #[serde(default)]
+    ml: Vec<Option<MlSegmentInput>>,
+    #[serde(default)]
+    ml_entry_demand: Vec<f64>,
+    #[serde(default = "default_ml_ffs")]
+    ml_ffs: f64,
+    #[serde(default)]
+    cross_weave: Vec<Option<CrossWeave>>,
+}
+
+/// Matches the core `ManagedLaneFacility::default()` free-flow speed, so a
+/// config that omits `ml_ffs` lands where a deserialized facility would.
+fn default_ml_ffs() -> f64 {
+    60.0
+}
+
+/// HCM Chapter 10 managed-lane facility extension (Steps A-9/A-13/A-14/A-17;
+/// Chapter 25 Section 2): a general-purpose lane group paired with a parallel
+/// managed-lane lane group, analyzed with the cross-weave capacity adjustment
+/// on the GP side and the adjacent-friction speed reduction on the ML side,
+/// then aggregated per lane group and combined.
+///
+/// The managed lane is not a segment flag on the GP facility, so it cannot be
+/// reached through [`WasmFreewayFacility`]. `ml` is a vector parallel to the
+/// GP segments carrying `null` where a GP segment has no adjacent managed
+/// lane, and the ML lane group has its own entry demand, free-flow speed, and
+/// ramp demands. Those are the inputs this wrapper adds.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct WasmManagedLaneFacility {
+    inner: ManagedLaneFacility,
+}
+
+#[wasm_bindgen]
+impl WasmManagedLaneFacility {
+
+    /// Build the whole facility, both lane groups, from a configuration
+    /// object matching the serde schema of the library's
+    /// `ManagedLaneFacility` — the shape of the library's own fixtures, so
+    /// `tests/ExampleCases/hcm/FreewayFacilities/ml_case1.json` (Example
+    /// Problem 5) loads verbatim:
+    ///
+    /// ```json
+    /// {
+    ///   "gp": { "segments": [ ... ], "mainline_demand": [ ... ], "ffs": 60.0 },
+    ///   "ml": [ { "lane_type": "ContinuousAccess", "lanes": 1 }, null ],
+    ///   "ml_entry_demand": [1000.0, 1100.0],
+    ///   "ml_ffs": 60.0
+    /// }
+    /// ```
+    ///
+    /// `gp` is the same schema [`WasmFreewayFacility`] takes positionally.
+    /// `ml` must have one entry per GP segment once `run_analysis()` is
+    /// called, `null` marking a segment with no adjacent managed lane.
+    /// `lane_type` is one of `ContinuousAccess` / `Buffer1` / `Buffer2` /
+    /// `Barrier1` / `Barrier2` (Exhibit 12-9); only the first two are subject
+    /// to the Step A-13 adjacent friction. An ML segment may also carry
+    /// `ffs`, `caf`, `saf`, `on_ramp_demand`, and `off_ramp_demand`. The
+    /// optional `cross_weave` vector is parallel to the GP segments as well,
+    /// each entry `{"cw_demand_pc": [...], "l_cw_min_ft": 0.0}` (Step A-9,
+    /// Equations 13-24/13-25); omit it and no cross-weave reduction applies.
+    ///
+    /// Every field has a serde default and unknown fields are ignored, so a
+    /// misspelled field name falls back to its default rather than throwing —
+    /// prefer copying names from the fixture files.
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<WasmManagedLaneFacility, JsValue> {
+        let inner: ManagedLaneFacility = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid managed-lane facility configuration: {e}")))?;
+        Ok(WasmManagedLaneFacility { inner })
+    }
+
+    /// Build from an already-constructed general-purpose facility plus the
+    /// managed-lane half as a config object (`ml`, `ml_entry_demand`,
+    /// `ml_ffs`, `cross_weave`, as documented on the constructor). The GP
+    /// facility is copied, not consumed, and need not have been run.
+    pub fn from_gp(gp: &WasmFreewayFacility, ml_config: JsValue) -> Result<WasmManagedLaneFacility, JsValue> {
+        let cfg: MlConfig = serde_wasm_bindgen::from_value(ml_config)
+            .map_err(|e| JsValue::from_str(&format!("invalid managed-lane configuration: {e}")))?;
+        let mut inner = ManagedLaneFacility::new();
+        inner.gp = gp.inner.clone();
+        inner.ml = cfg.ml;
+        inner.ml_entry_demand = cfg.ml_entry_demand;
+        inner.ml_ffs = cfg.ml_ffs;
+        inner.cross_weave = cfg.cross_weave;
+        Ok(WasmManagedLaneFacility { inner })
+    }
+
+    /// Run both lane groups and the combined aggregation. Throws when `ml`
+    /// (or a non-empty `cross_weave`) does not have one entry per GP segment,
+    /// and on any GP validation failure.
+    pub fn run_analysis(&mut self) -> Result<(), JsValue> {
+        self.inner.run_analysis().map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn num_segments(&self) -> usize {
+        self.inner.num_segments()
+    }
+
+    pub fn num_periods(&self) -> usize {
+        self.inner.num_periods()
+    }
+
+    /// The general-purpose lane group as a [`WasmFreewayFacility`], which is
+    /// how the GP segment matrices are read. This is a snapshot copy taken
+    /// after `run_analysis()`, so the Step A-9 cross-weave CAF is already
+    /// folded into its segment capacities; running it again is harmless but
+    /// pointless.
+    pub fn gp_facility(&self) -> WasmFreewayFacility {
+        WasmFreewayFacility { inner: self.inner.gp.clone() }
+    }
+
+    /// ML segment demand, veh/h — the entry demand accumulated through the ML
+    /// ramp demands, not metered by capacity.
+    pub fn get_ml_demand(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_demand.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    /// ML segment capacity, veh/h (Exhibit 25-81): the Chapter 12 adjusted
+    /// per-lane capacity times the lane count and the facility heavy-vehicle
+    /// factor, so it is a vehicle rate and not the pc/h/ln of Equation 12-14.
+    pub fn get_ml_capacity(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_capacity.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    pub fn get_ml_dc_ratio(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_dc_ratio.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    pub fn get_ml_speed(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_speed.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    pub fn get_ml_density_veh(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_density_veh.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    pub fn get_ml_density_pc(&self, seg: usize, period: usize) -> f64 {
+        self.inner.ml_density_pc.get(seg).and_then(|r| r.get(period)).copied().unwrap_or(0.0)
+    }
+
+    pub fn get_ml_los(&self, seg: usize, period: usize) -> String {
+        self.inner
+            .ml_los
+            .get(seg)
+            .and_then(|r| r.get(period))
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    /// Whether the Step A-13 adjacent friction was active on the ML segment,
+    /// which needs both a friction-capable lane type (continuous access or
+    /// Buffer 1) and an adjacent GP density above 35 pc/mi/ln. The speed drop
+    /// it causes is already in `get_ml_speed()`; this reports why.
+    pub fn is_ml_friction_active(&self, seg: usize, period: usize) -> bool {
+        self.inner
+            .ml_friction_active
+            .get(seg)
+            .and_then(|r| r.get(period))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub fn get_gp_group_speed(&self, period: usize) -> f64 {
+        self.inner.gp_group_performance.get(period).map(|g| g.space_mean_speed).unwrap_or(0.0)
+    }
+
+    pub fn get_gp_group_density_veh(&self, period: usize) -> f64 {
+        self.inner.gp_group_performance.get(period).map(|g| g.avg_density_veh).unwrap_or(0.0)
+    }
+
+    pub fn get_gp_group_los(&self, period: usize) -> String {
+        self.inner
+            .gp_group_performance
+            .get(period)
+            .map(|g| g.los.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn get_ml_group_speed(&self, period: usize) -> f64 {
+        self.inner.ml_group_performance.get(period).map(|g| g.space_mean_speed).unwrap_or(0.0)
+    }
+
+    pub fn get_ml_group_density_veh(&self, period: usize) -> f64 {
+        self.inner.ml_group_performance.get(period).map(|g| g.avg_density_veh).unwrap_or(0.0)
+    }
+
+    pub fn get_ml_group_los(&self, period: usize) -> String {
+        self.inner
+            .ml_group_performance
+            .get(period)
+            .map(|g| g.los.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn get_facility_speed(&self, period: usize) -> f64 {
+        self.inner.facility_performance.get(period).map(|p| p.space_mean_speed).unwrap_or(0.0)
+    }
+
+    /// Combined facility density, veh/mi/ln (Exhibit 25-87).
+    ///
+    /// VERIFY-HCM: this is the exact Equation 10-1 lane-mile-weighted
+    /// combination of the two lane-group densities. In Example Problem 5
+    /// Period 3 it gives 28.3 where Exhibit 25-87 prints 29.1, a value not
+    /// reproducible from the book's own Exhibit 25-86 group densities (31.0
+    /// GP, 20.0 ML) under Equation 10-1. LOS is unaffected.
+    pub fn get_facility_density_veh(&self, period: usize) -> f64 {
+        self.inner.facility_performance.get(period).map(|p| p.avg_density_veh).unwrap_or(0.0)
+    }
+
+    pub fn get_facility_los(&self, period: usize) -> String {
+        self.inner
+            .facility_performance
+            .get(period)
+            .map(|p| p.los.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn ml_capacity_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_capacity).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn ml_dc_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_dc_ratio).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn ml_speed_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_speed).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn ml_density_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_density_veh).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn ml_los_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_los).unwrap_or(JsValue::NULL)
+    }
+
+    pub fn ml_friction_matrix(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.ml_friction_active).unwrap_or(JsValue::NULL)
+    }
+
+    /// Both lane groups by period (Exhibit 25-86): space mean speed, average
+    /// density in veh/mi/ln and pc/mi/ln, and LOS.
+    pub fn lane_group_performance_to_js_value(&self) -> JsValue {
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("gp"), &serde_wasm_bindgen::to_value(&self.inner.gp_group_performance).unwrap_or(JsValue::NULL)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("ml"), &serde_wasm_bindgen::to_value(&self.inner.ml_group_performance).unwrap_or(JsValue::NULL)).unwrap();
+        JsValue::from(obj)
+    }
+
+    pub fn results_to_js_value(&self) -> JsValue {
+        let periods = self.inner.num_periods();
+        let facility_speed: Vec<f64> = (0..periods).map(|p| self.get_facility_speed(p)).collect();
+        let facility_density_veh: Vec<f64> = (0..periods).map(|p| self.get_facility_density_veh(p)).collect();
+        let facility_los: Vec<String> = (0..periods).map(|p| self.get_facility_los(p)).collect();
+
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("num_segments"), &JsValue::from(self.num_segments() as u32)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("num_periods"), &JsValue::from(periods as u32)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("facility_speed"), &serde_wasm_bindgen::to_value(&facility_speed).unwrap_or(JsValue::NULL)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("facility_density_veh"), &serde_wasm_bindgen::to_value(&facility_density_veh).unwrap_or(JsValue::NULL)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("facility_los"), &serde_wasm_bindgen::to_value(&facility_los).unwrap_or(JsValue::NULL)).unwrap();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("lane_groups"), &self.lane_group_performance_to_js_value()).unwrap();
 
         JsValue::from(obj)
     }
