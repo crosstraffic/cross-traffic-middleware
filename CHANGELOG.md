@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.6 — 2026-08
+
+`transportations_library` 0.3.1 corrected the two-lane facility follower density of Equation 15-39, but it did so by centralizing an aggregation that had never existed in the core, so nothing that reaches the core through this crate got the correction. Every caller was still summing the per-segment column itself. This release binds the aggregator.
+
+### Added
+
+- **`WasmTwoLaneHighways.determine_facility_follower_density()`**, the Step 11 length-weighted facility follower density of Equation 15-39. Equation 15-39 defines FD_i as the "follower density, or adjusted follower density, for segment i", which the `fd` column of `segs_to_js_value()` does not carry on its own: a passing lane contributes FD_PLmid and a segment within the effective downstream length of an upstream passing lane contributes its Step 9 adjusted density. The web calculator's Chapter 15 page reweighted that column in JS, substituting `fd_mid` on passing lanes but taking the raw `fd` everywhere else, which drops the Step 9 benefit that most of Chapter 26 Example Problem 3 is spent computing. On that example the JS reweighting returns 8.041 followers/mi/ln and LOS D where Exhibit 26-27 publishes 7.3 and LOS C; through this method the same fixture returns 7.271 and LOS C. The binding takes `&mut self` because the core walks the segments in order to place the effective downstream length of the passing lane before the segments measured against it. That length is facility state that persists, so this binding restores the constructor's `l_de` before delegating. Without it, a caller that has already run its own per-segment `determine_adjustment_to_follower_density` loop, which is what fills the calculator's FD-adjustment column, would have left the length set, and the walk would then apply an adjustment to the segments upstream of the passing lane, whose distance from it is zero. Example Problem 4 places its passing lane fifth of six and returns 14.936 that way against 19.897; Example Problem 3 places its passing lane second and is unaffected, so the hazard hides on half the fixtures.
+
+HCM-coverage releases stay within the 0.3.x family so the CrossTraffic crates carry a matched version line.
+
 ## 0.3.5 — 2026-08
 
 The web calculator's boundary suite carried five chapters' worth of checks that could not run, each because a value the published example problem prints has no getter on the wrapper. This release adds those getters. Everything here reads a field the core already computes, so no result changes and nothing published earlier is removed or renamed.
