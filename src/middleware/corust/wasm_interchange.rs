@@ -19,11 +19,34 @@ impl WasmInterchange {
     /// (same shape as `tests/ExampleCases/hcm/RampTerminals/case1.json`):
     /// interchange form, cycle length, O-D demands A..N, and the per-lane-group
     /// geometry and signal timing.
+    ///
+    /// `form` is one of the nine Exhibit 23-17 / 23-18 names: `"Diamond"`,
+    /// `"Ddi"`, `"ParcloA2Q"`, `"ParcloA4Q"`, `"ParcloAB2Q"`, `"ParcloAB4Q"`,
+    /// `"ParcloB2Q"`, `"ParcloB4Q"`, `"Spui"`. Only `Diamond`, `Ddi`, and
+    /// `ParcloA2Q` are validated against a published example problem; the
+    /// other six route and analyze but have no published answer column behind
+    /// them (the library says the same in `docs/hcm/VERIFICATION.md`).
+    ///
+    /// A lane group's `movement` is the composed name approach + position +
+    /// turn, e.g. `"EbExtThrough"`, `"EbExtLeft"`, `"EbIntThroughRight"`,
+    /// `"NbRampTwoLeft"`. The ten diamond names are unchanged compositions, so
+    /// a configuration written against 0.3.7 keeps its meaning.
+    ///
+    /// An unknown form or movement name is rejected here rather than defaulted,
+    /// which matters because a form that silently fell back to `Diamond` would
+    /// route every O-D through lane groups the interchange does not have.
     #[wasm_bindgen(constructor)]
     pub fn new(config: JsValue) -> Result<WasmInterchange, JsValue> {
         let inner: Interchange = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid interchange configuration: {e}")))?;
         Ok(WasmInterchange { inner })
+    }
+
+    /// Interchange form as parsed, e.g. `"ParcloA2Q"`. This is the readback
+    /// that lets a caller prove the configuration it sent is the form the
+    /// engine analyzed, rather than inferring it from the lane groups.
+    pub fn get_form(&self) -> String {
+        format!("{:?}", self.inner.get_form())
     }
 
     /// Run the complete HCM Ch.23 Part B procedure (Steps 1-9 of Exhibit 23-22).
