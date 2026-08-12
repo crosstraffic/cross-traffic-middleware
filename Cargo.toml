@@ -1,6 +1,6 @@
 [package]
 name = "crosstraffic_middleware"
-version = "0.3.7"
+version = "0.3.8"
 authors = ["Rei Tamaru <tamaru@wisc.edu>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -16,7 +16,10 @@ exclude = [
 wasm-bindgen = "0.2.90"
 serde = { version = "1.0", features = ["derive"]}
 serde-wasm-bindgen = "0.4"
-transportations_library = { version = "0.3.2", path = "../transportations-library" }
+# 0.3.3 is not on crates.io yet: the Chapter 23 composed lane groups and the parclo
+# family land there. Publish the library first, then this crate, or the published
+# 0.3.8 will not resolve.
+transportations_library = { version = "0.3.3", path = "../transportations-library" }
 js-sys = "0.3.67"
 
 [lib]
