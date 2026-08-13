@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+use transportations_library::hcm::twsc::pedestrian::PedestrianCrossing;
 use transportations_library::twsc::{
     ConflictingFlowOverride, MajorRightTurnConfig, MinorLaneConfig, Mv, Twsc, TwscDemand,
     TwscGeometry, TwscLaneResult, UTurnMedianWidth, ALL_MOVEMENTS,
@@ -413,5 +414,107 @@ impl WasmTwsc {
                 "TWSC minor approach must be NB or SB, got {other}"
             ))),
         }
+    }
+}
+
+/// Pedestrian mode at a TWSC or midblock crossing (HCM Chapter 20, Section 5).
+///
+/// This is the pedestrian mode proper, where the pedestrian is the subject and
+/// the service measure is the proportion of pedestrians who would rate the
+/// crossing "dissatisfied" or worse. It is a different procedure from the
+/// Section 4 pedestrian-impedance extension, which is reached through the
+/// `v13_ped` through `v16_ped` arguments of [`WasmTwsc`] and reduces vehicular
+/// movement capacity instead.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct WasmPedestrianCrossing {
+    inner: PedestrianCrossing,
+}
+
+#[wasm_bindgen]
+impl WasmPedestrianCrossing {
+    /// Build a pedestrian crossing from a configuration object matching the
+    /// serde schema of `hcm::twsc::pedestrian::PedestrianCrossing`:
+    ///
+    /// ```json
+    /// {
+    ///   "stages": [
+    ///     { "crossing_length_ft": 20.0, "conflicting_flow_veh_h": 850.0,
+    ///       "through_lanes": 2 },
+    ///     { "crossing_length_ft": 20.0, "conflicting_flow_veh_h": 850.0,
+    ///       "through_lanes": 2 }
+    ///   ],
+    ///   "walk_speed_fps": 4.0,
+    ///   "startup_clearance_s": 1.0,
+    ///   "motorist_yield_rate": 0.5,
+    ///   "pedestrian_platooning": false,
+    ///   "peak_hour_volume_veh_h": 1700.0,
+    ///   "k_factor": 0.08,
+    ///   "has_rrfb": false,
+    ///   "has_marked_crosswalk": true,
+    ///   "has_median_refuge": true
+    /// }
+    /// ```
+    ///
+    /// One `stages` entry per crossing stage in travel order (Step 1): a single
+    /// entry spanning the street, or one per side of a median refuge, each
+    /// carrying only the lanes and conflicting flow of its own side. AADT for
+    /// Equation 20-95 comes from `aadt_veh` when given and otherwise from
+    /// `peak_hour_volume_veh_h / k_factor`. `crosswalk_width_ft` and
+    /// `pedestrian_flow_p_h` are read only when `pedestrian_platooning` is
+    /// true, since Equations 20-77 and 20-78 are skipped otherwise.
+    ///
+    /// An empty or missing `stages` list is rejected here rather than passed
+    /// through. `PedestrianCrossing` is `serde(default)` at both levels, so a
+    /// misspelled or omitted `stages` key deserializes into a crossing with no
+    /// stages, which analyzes to zero delay and LOS A rather than failing. That
+    /// is the one input mistake on this surface whose result still reads like a
+    /// finished answer.
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<WasmPedestrianCrossing, JsValue> {
+        let inner: PedestrianCrossing = serde_wasm_bindgen::from_value(config).map_err(|e| {
+            JsValue::from_str(&format!("invalid pedestrian crossing configuration: {e}"))
+        })?;
+        if inner.stages.is_empty() {
+            return Err(JsValue::from_str(
+                "pedestrian crossing needs at least one stage: give `stages` one entry for a single-stage crossing, or one per side for a crossing with a median refuge",
+            ));
+        }
+        Ok(WasmPedestrianCrossing { inner })
+    }
+
+    /// Full evaluation as a JS object in the serde schema of
+    /// `PedestrianCrossingAnalysis`: the per-stage `stages` array carrying the
+    /// Step 2 through Step 5 chain (`critical_headway`, `platoon_size`,
+    /// `spatial_distribution`, `group_critical_headway`, `prob_blocked_lane`,
+    /// `prob_delayed_crossing`, `gap_delay`, `gap_delay_when_delayed`,
+    /// `average_short_headway`, `yield_events`, the `prob_yield` array indexed
+    /// from P(Y_0) = 0, and the stage `delay`), then the Step 6 total `delay`
+    /// with its Exhibit 20-29 `delay_interpretation`, the Step 7 satisfaction
+    /// odds and probabilities, `prob_non_delayed`, `proportion_dissatisfied`,
+    /// and the Exhibit 20-3 `los` letter.
+    pub fn results_to_js_value(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.analyze()).unwrap_or(JsValue::NULL)
+    }
+
+    /// Number of crossing stages this configuration deserialized into. A
+    /// two-stage crossing that arrives as one stage is the failure the
+    /// constructor cannot catch, because one stage is a valid crossing.
+    pub fn get_stage_count(&self) -> u32 {
+        self.inner.stages.len() as u32
+    }
+
+    /// Average pedestrian control delay over all stages d_p, s
+    /// (Equation 20-94).
+    pub fn get_delay(&self) -> f64 {
+        self.inner.analyze().delay
+    }
+
+    /// Pedestrian LOS letter from the average proportion of "dissatisfied"
+    /// ratings (Exhibit 20-3), e.g. "C". Note this is a satisfaction basis, not
+    /// a delay basis: the Exhibit 20-29 delay interpretation in the results
+    /// object is commentary and does not set the letter.
+    pub fn get_los(&self) -> String {
+        self.inner.analyze().los.to_string()
     }
 }
