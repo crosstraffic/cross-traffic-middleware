@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use transportations_library::hcm::chapter11::reliability::ReliabilityAnalysis;
-use transportations_library::hcm::chapter11::exhibits::SEVERE_WEATHER_TYPES;
+use transportations_library::hcm::chapter11::exhibits::{INCIDENT_SEVERITIES, SEVERE_WEATHER_TYPES};
 use transportations_library::hcm::chapter11::scenario_generation::{
     FreewayScenario, IncidentInputs, Weekday, WeatherInputs,
 };
@@ -24,8 +24,10 @@ fn parse_weekday(s: &str) -> Weekday {
 /// scenario generator defaults to a whole-year reliability reporting period
 /// (12 months, Monday through Friday, Exhibit 11-18 urban demand ratios) with
 /// no weather; `set_weather()` and `set_demand_multipliers()` replace those
-/// two defaults. Work zones and special events, and with them the Chapter 37
-/// ATDM strategies built on top of them, are not exposed by this binding.
+/// two defaults, and `set_incidents()` replaces the incident inputs the
+/// constructor's two scalars can only partly describe. Work zones and special
+/// events, and with them the Chapter 37 ATDM strategies built on top of them,
+/// are not exposed by this binding.
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct WasmFreewayReliability {
@@ -176,6 +178,95 @@ impl WasmFreewayReliability {
 
     pub fn has_weather(&self) -> bool {
         self.inner.scenario_generation.weather.is_some()
+    }
+
+    /// Place the Step B-7 incident inputs, from a configuration object in the
+    /// serde schema of the library's `IncidentInputs`, so the `incidents`
+    /// object of `tests/ExampleCases/hcm/FreewayReliability/case1.json` passes
+    /// verbatim. This replaces whatever the constructor's `crash_rate_per_100mvmt`
+    /// and `incident_to_crash_ratio` arguments built, which is an
+    /// `IncidentInputs::default()` carrying those two scalars and the national
+    /// defaults for everything else. Three of those defaults are analysis
+    /// inputs in their own right and had no way in: the Equation 25-77 monthly
+    /// frequencies when local counts are known rather than a crash rate, the
+    /// Equation 25-85 severity distribution G(i), and the Exhibit 11-22
+    /// lognormal duration parameters by severity. The last of those is what
+    /// Chapter 25 Example Problem 9 changes, cutting every severity's mean
+    /// duration and standard deviation by 30% to model improved incident
+    /// management, so before this setter the published incident-management
+    /// alternative could not be expressed through the binding at all.
+    ///
+    /// The shapes are checked here because `IncidentInputs` is `serde(default)`
+    /// and the core reads all three leniently. `duration_params` is looked up
+    /// as `get(severity).unwrap_or(Exhibit 11-22 default)`, so a four-entry
+    /// list quietly restores the book durations for the severity it omits,
+    /// which is the exact mistake a 30% cut written out by hand invites.
+    /// `severity_distribution` is validated by the core for its sum but not
+    /// its length, so a short one drops severities and a long one indexes past
+    /// the five of Equation 25-85. `monthly_frequencies` is read as
+    /// `get(month).unwrap_or(0.0)`, so an eleven-month table silently models a
+    /// year with one incident-free month. Finally, an incident configuration
+    /// with neither `monthly_frequencies` nor `crash_rate_per_100mvmt` has no
+    /// frequency source at all and generates zero incidents while reporting
+    /// that incidents are modeled, which is what a wholly misspelled config
+    /// deserializes into, so it is rejected rather than run.
+    pub fn set_incidents(&mut self, config: JsValue) -> Result<(), JsValue> {
+        let incidents: IncidentInputs = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("Invalid incident config: {e}")))?;
+        let n_sev = INCIDENT_SEVERITIES.len();
+        if incidents.severity_distribution.len() != n_sev {
+            return Err(JsValue::from_str(&format!(
+                "incidents.severity_distribution must have {n_sev} entries (Equation 25-85 order: shoulder, 1, 2, 3, 4+ lanes closed), got {}",
+                incidents.severity_distribution.len()
+            )));
+        }
+        if incidents.duration_params.len() != n_sev {
+            return Err(JsValue::from_str(&format!(
+                "incidents.duration_params must have {n_sev} entries (one per severity, Equation 25-85 order), got {}",
+                incidents.duration_params.len()
+            )));
+        }
+        if let Some(freqs) = &incidents.monthly_frequencies {
+            if freqs.len() != 12 {
+                return Err(JsValue::from_str(&format!(
+                    "incidents.monthly_frequencies must have 12 entries (January-December), got {}",
+                    freqs.len()
+                )));
+            }
+        }
+        if incidents.monthly_frequencies.is_none() && incidents.crash_rate_per_100mvmt.is_none() {
+            return Err(JsValue::from_str(
+                "incidents needs a frequency source: set monthly_frequencies (Equation 25-77 n_j) or crash_rate_per_100mvmt (Equation 25-78), or clear_incidents() to model none",
+            ));
+        }
+        self.inner.scenario_generation.incidents = Some(incidents);
+        Ok(())
+    }
+
+    /// Remove the incident inputs, returning the generator to modeling no
+    /// incidents at all. This is the state a constructor called without a
+    /// crash rate leaves behind.
+    pub fn clear_incidents(&mut self) {
+        self.inner.scenario_generation.incidents = None;
+    }
+
+    pub fn has_incidents(&self) -> bool {
+        self.inner.scenario_generation.incidents.is_some()
+    }
+
+    /// The Exhibit 11-22 lognormal duration parameters as the generator will
+    /// use them, one object per severity in Equation 25-85 order, or `null`
+    /// when no incidents are modeled. A caller scaling the book defaults (the
+    /// Example Problem 9 alternative) reads them here rather than transcribing
+    /// the exhibit, and a caller that supplied its own can confirm the list
+    /// that arrived is the list that will run.
+    pub fn incident_duration_params(&self) -> JsValue {
+        self.inner
+            .scenario_generation
+            .incidents
+            .as_ref()
+            .and_then(|inc| serde_wasm_bindgen::to_value(&inc.duration_params).ok())
+            .unwrap_or(JsValue::NULL)
     }
 
     /// Replace the demand multipliers DM of Equation 25-72 with a local
