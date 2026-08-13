@@ -136,9 +136,9 @@ impl WasmFacilitySegment {
     /// }
     /// ```
     ///
-    /// The work zone is a structured input with eleven fields, all of which
+    /// The work zone is a structured input with ten fields, all of which
     /// enter Equations 10-7 through 10-12, so it arrives as a config object
-    /// rather than as eleven more trailing constructor arguments, the same
+    /// rather than as ten more trailing constructor arguments, the same
     /// choice `WasmManagedLaneFacility` makes for the other Chapter 10 input
     /// that has no home on a segment. This is a setter rather than an
     /// eighteenth constructor argument so that the seventeen-argument
