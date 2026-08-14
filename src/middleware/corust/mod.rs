@@ -1,5 +1,6 @@
 pub mod wasm_twolanehighways;
 pub mod wasm_basicfreeways;
+pub mod wasm_mixed_flow;
 pub mod wasm_managed_lanes;
 pub mod wasm_freeway_facilities;
 pub mod wasm_freeway_reliability;
