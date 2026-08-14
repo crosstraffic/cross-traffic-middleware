@@ -55,8 +55,10 @@ impl WasmMixedFlow {
     /// there is no upper bound on a grade's length to check it against.
     ///
     /// Only `caf_ao` is optional, defaulting to 1.0, which is the no-adjustment case. Every
-    /// other field is required, so a misspelled key is rejected here rather than silently
-    /// defaulted.
+    /// other field is required, and the core struct denies unknown keys, so a misspelled key is
+    /// rejected here rather than silently defaulted — including a misspelled `caf_ao`, which
+    /// before library 0.3.5's `deny_unknown_fields` would have been dropped and quietly analyzed
+    /// unadjusted.
     ///
     /// The analysis itself is deferred to [`Self::results_to_js_value`], because the inputs can
     /// be well-formed and still lie outside the digitised truck curves, which is a refusal about
@@ -77,19 +79,18 @@ impl WasmMixedFlow {
     /// Equation 26-20 exponent (`s_calib_cap`, `s_calib_90cap`, `phi_mix`), and the Equation
     /// 26-21/26-22 answer (`s_mix`, `d_mix`, `oversaturated`).
     ///
-    /// `s_mix` and `d_mix` are `null` when demand exceeds mixed-flow capacity, which Chapter 26
-    /// Step 2 calls LOS F and stops on rather than reporting a speed.
+    /// `s_mix` and `d_mix` are ABSENT (`undefined` in JS, not `null` — serde crosses `None` as
+    /// `undefined`) when demand exceeds mixed-flow capacity, which Chapter 26 Step 2 calls LOS F
+    /// and stops on rather than reporting a speed. A page guarding on `=== null` never fires;
+    /// guard on `== null` or `typeof`.
     ///
-    /// Throws when the grade, length or free-flow speed lands outside the digitised truck
-    /// curves. The message names the exhibit that would have to be digitised, because these
+    /// Throws when the grade or free-flow speed lands outside the digitised truck
+    /// curves (length never throws — see the constructor note on lengths in feet). The message names the exhibit that would have to be digitised, because these
     /// curves are published as figures with no closed form anywhere in either chapter and each
     /// grade settles at its own crawl speed, so extrapolating between them would be quietly
     /// wrong rather than approximately right.
     pub fn results_to_js_value(&self) -> Result<JsValue, JsValue> {
-        let result = self
-            .inner
-            .analyze()
-            .map_err(|e| JsValue::from_str(&analysis_error("mixed-flow analysis failed", &e)))?;
+        let result = self.analyze()?;
         serde_wasm_bindgen::to_value(&result)
             .map_err(|e| JsValue::from_str(&format!("could not serialize mixed-flow result: {e}")))
     }
@@ -158,9 +159,11 @@ impl WasmCompositeGrade {
     /// facility, and an explicitly empty list is rejected by the core's own `validate` before it
     /// reaches the per-segment capacity minimum that would panic on it. The only serde-defaulted
     /// field on either mixed-flow surface is `caf_ao`, whose default of 1.0 is the
-    /// no-adjustment case rather than a stand-in for something the caller meant to supply. So
-    /// there is no input here that arrives wrong and still produces a finished answer, which is
-    /// the condition the guards elsewhere in this crate exist for.
+    /// no-adjustment case rather than a stand-in for something the caller meant to supply, and
+    /// since library 0.3.5 both input structs deny unknown keys, so even a misspelled `caf_ao`
+    /// is rejected naming the key rather than dropped. So there is no input here that arrives
+    /// wrong and still produces a finished answer, which is the condition the guards elsewhere
+    /// in this crate exist for.
     #[wasm_bindgen(constructor)]
     pub fn new(config: JsValue) -> Result<WasmCompositeGrade, JsValue> {
         let inner: CompositeGrade = serde_wasm_bindgen::from_value(config).map_err(|e| {
@@ -185,17 +188,16 @@ impl WasmCompositeGrade {
     /// surface, because the entry speed into each segment is computed rather than given, so a
     /// configuration whose every field is inside the digitised range can still walk out of it.
     pub fn results_to_js_value(&self) -> Result<JsValue, JsValue> {
-        let result = self.inner.analyze().map_err(|e| {
-            JsValue::from_str(&analysis_error("composite-grade analysis failed", &e))
-        })?;
+        let result = self.analyze()?;
         serde_wasm_bindgen::to_value(&result).map_err(|e| {
             JsValue::from_str(&format!("could not serialize composite-grade result: {e}"))
         })
     }
 
-    /// Number of grades this configuration deserialized into. A composite grade that arrives
-    /// short a segment is the failure the constructor cannot catch, because a shorter facility
-    /// is a valid one, and it moves every number rather than failing.
+    /// Number of grades this configuration deserialized into — a serialization sanity check,
+    /// not a defense against a caller who built the config short: this only echoes what
+    /// deserialized, which equals the caller's own `segments.length`. A composite grade that
+    /// arrives short a segment is a valid facility and is not detectable at this layer.
     pub fn get_segment_count(&self) -> u32 {
         self.inner.segments.len() as u32
     }
