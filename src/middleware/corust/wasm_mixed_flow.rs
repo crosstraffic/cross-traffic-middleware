@@ -65,7 +65,14 @@ impl WasmMixedFlow {
     /// coverage rather than about the configuration.
     #[wasm_bindgen(constructor)]
     pub fn new(config: JsValue) -> Result<WasmMixedFlow, JsValue> {
-        let inner: MixedFlowSegment = serde_wasm_bindgen::from_value(config)
+        // Through JSON.stringify + the core's serde_json path rather than
+        // serde_wasm_bindgen::from_value: from_value reads only the fields it
+        // knows and never enumerates the object's own keys, so the core's
+        // deny_unknown_fields has nothing to deny and a misspelled `caf_ao`
+        // would be silently dropped in favor of the 1.0 default.
+        let json = js_sys::JSON::stringify(&config)
+            .map_err(|_| JsValue::from_str("invalid mixed-flow configuration: not serializable"))?;
+        let inner = MixedFlowSegment::from_json(&String::from(json))
             .map_err(|e| JsValue::from_str(&format!("invalid mixed-flow configuration: {e}")))?;
         Ok(WasmMixedFlow { inner })
     }
@@ -166,7 +173,12 @@ impl WasmCompositeGrade {
     /// in this crate exist for.
     #[wasm_bindgen(constructor)]
     pub fn new(config: JsValue) -> Result<WasmCompositeGrade, JsValue> {
-        let inner: CompositeGrade = serde_wasm_bindgen::from_value(config).map_err(|e| {
+        // Same JSON.stringify route as WasmMixedFlow, and for the same reason:
+        // only the serde_json path can enforce the core's deny_unknown_fields.
+        let json = js_sys::JSON::stringify(&config).map_err(|_| {
+            JsValue::from_str("invalid composite-grade configuration: not serializable")
+        })?;
+        let inner = CompositeGrade::from_json(&String::from(json)).map_err(|e| {
             JsValue::from_str(&format!("invalid composite-grade configuration: {e}"))
         })?;
         Ok(WasmCompositeGrade { inner })
