@@ -1,7 +1,8 @@
 use wasm_bindgen::prelude::*;
 use transportations_library::common::HcmVersion;
+use transportations_library::merge_diverge as md;
 use transportations_library::merge_diverge::{
-    AdjacentRampType, RampLanes, RampSegment, RampSide, RampType, TerrainType,
+    AdjacentRampType, RampLanes, RampSegment, RampSide, RampType, ServiceDemandBasis, TerrainType,
 };
 
 fn parse_adjacent(s: &str) -> AdjacentRampType {
@@ -336,5 +337,201 @@ impl WasmRampSegment {
         js_sys::Reflect::set(&obj, &JsValue::from_str("speed_avg"), &JsValue::from(self.get_speed_avg())).unwrap();
 
         JsValue::from(obj)
+    }
+}
+
+// =============================================================================
+// Service flow rates and service volumes (HCM Chapter 28, Example Problem 5)
+// =============================================================================
+
+/// Reject a basis or a target density that would make the search return a
+/// number rather than fail.
+///
+/// The core searches by comparing densities, and every comparison against a NaN
+/// is false, so a non-finite input walks straight through the search's own
+/// escape hatches. The "already past the target" test does not fire, so the
+/// unachievable-LOS `None` is not returned; the bracket never doubles; and the
+/// bisection drives its upper bound down to zero. What comes back is
+/// `Some(4.4e-13)`, a service flow rate of zero rather than a failure, and the
+/// caller has no way to tell it from a location whose LOS A threshold really is
+/// that low. A NaN can arrive from an emptied number input as easily as from
+/// arithmetic, so the check belongs at the boundary the values cross.
+fn validate_search(basis: &ServiceDemandBasis, target_density: f64) -> Result<(), String> {
+    if !target_density.is_finite() || target_density <= 0.0 {
+        return Err(format!(
+            "target_density must be a positive finite density in pc/mi/ln, got {target_density}"
+        ));
+    }
+    let (name, value) = match *basis {
+        ServiceDemandBasis::ApproachingFreeway { ramp_fraction } => {
+            ("ramp_fraction", ramp_fraction)
+        }
+        ServiceDemandBasis::FixedFreeway { v_f } => ("v_f", v_f),
+    };
+    if !value.is_finite() || value < 0.0 {
+        return Err(format!(
+            "{name} must be a non-negative finite number, got {value}"
+        ));
+    }
+    Ok(())
+}
+
+/// Service flow rate under ideal conditions SFI (pc/h) at a target ramp-influence
+/// density - HCM Chapter 28, Example Problem 5.
+///
+/// Holds `template`'s geometry fixed and searches, under equivalent ideal
+/// conditions (PHF = 1, no heavy vehicles, CAF = SAF = 1), for the demand that
+/// drives the Equation 14-22 ramp-influence density to `target_density`. Use the
+/// Exhibit 14-3 LOS thresholds 10, 20, 28, and 35 pc/mi/ln for LOS A through D.
+/// The template's own demands, PHF, and heavy-vehicle percentages are ignored,
+/// since the search supplies them; everything else about the segment matters.
+///
+/// `basis` is the serde form of the core's `ServiceDemandBasis`, an object
+/// carrying the variant name as its single key:
+///
+/// ```json
+/// { "ApproachingFreeway": { "ramp_fraction": 0.10 } }
+/// { "FixedFreeway": { "v_f": 4896.0 } }
+/// ```
+///
+/// The two are different questions and the returned quantity differs with them.
+/// `ApproachingFreeway` varies the approaching freeway demand with the ramp
+/// tracking it at `ramp_fraction * v_F` and returns v_F (Exhibit 28-4, Case 1);
+/// `FixedFreeway` holds the approaching freeway at `v_f` pc/h ideal and varies
+/// the ramp, returning v_R (Exhibit 28-5, Case 2). An unknown variant name, a
+/// misspelled inner field (neither field has a serde default, so it arrives as a
+/// missing field), and an object carrying both variant keys at once are all
+/// rejected rather than resolved. What nothing can catch is a caller that sends
+/// one basis meaning the other, since both return a plausible flow and only the
+/// label on it changes.
+///
+/// Returns `undefined` when the target density is already exceeded at zero
+/// varied demand, which is how the book reports an unachievable LOS (Exhibit
+/// 28-5 prints NA for LOS A and B). That is a real answer about the location and
+/// not a failure, so it is an absent value rather than a throw. Note that
+/// `serde_wasm_bindgen` crosses `None` as `undefined` rather than `null`, so a
+/// caller guarding on `=== null` never fires.
+///
+/// LOS E is not reachable through this function. It is a capacity limit rather
+/// than a density, so it comes from `get_capacity_freeway()` and
+/// `get_capacity_ramp()` on a segment run under the same ideal conditions.
+#[wasm_bindgen]
+pub fn ramp_service_flow_rate_ideal(
+    template: &WasmRampSegment,
+    basis: JsValue,
+    target_density: f64,
+) -> Result<Option<f64>, JsValue> {
+    let basis: ServiceDemandBasis = serde_wasm_bindgen::from_value(basis).map_err(|e| {
+        JsValue::from_str(&format!(
+            "invalid service demand basis: {e} (expected {{\"ApproachingFreeway\": \
+             {{\"ramp_fraction\": ...}}}} or {{\"FixedFreeway\": {{\"v_f\": ...}}}})"
+        ))
+    })?;
+    validate_search(&basis, target_density).map_err(|e| JsValue::from_str(&e))?;
+    Ok(md::ramp_service_flow_rate_ideal(
+        &template.inner,
+        &basis,
+        target_density,
+    ))
+}
+
+/// Convert an ideal-conditions service flow rate to the prevailing-condition
+/// service flow rate and service volume - HCM Chapter 28, Example Problem 5.
+///
+/// SF = SFI x f_HV x f_p and SV = SF x PHF, so the returned `{ sf, sv }` are
+/// both in veh/h while `sfi` is in pc/h. The two come back named rather than as
+/// a pair because they are the same magnitude to within the PHF and a
+/// transposed pair would read as a finished answer.
+///
+/// * `f_hv` - heavy-vehicle adjustment factor.
+/// * `f_p` - driver-population factor, 1.0 for regular commuters.
+/// * `phf` - peak hour factor.
+#[wasm_bindgen]
+pub fn ramp_service_volumes(sfi: f64, f_hv: f64, f_p: f64, phf: f64) -> JsValue {
+    let (sf, sv) = md::ramp_service_volumes(sfi, f_hv, f_p, phf);
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("sf"), &JsValue::from(sf)).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("sv"), &JsValue::from(sv)).unwrap();
+    JsValue::from(obj)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard exists for the answer a non-finite input produces, not for the
+    /// input itself, so the test asserts what the core would have returned. A
+    /// NaN target and a NaN ramp fraction both collapse to zero on a segment
+    /// whose real LOS C service flow rate is above 5,000 pc/h, and neither
+    /// returns the `None` that means the LOS is unachievable.
+    #[test]
+    fn non_finite_search_inputs_would_return_a_zero_service_flow_rate() {
+        let template = RampSegment {
+            ramp_type: RampType::OnRamp,
+            ramp_side: RampSide::Right,
+            ramp_lanes: RampLanes::OneLane,
+            freeway_lanes: 3,
+            freeway_ffs: 70.0,
+            ramp_ffs: 40.0,
+            accel_lane_length: Some(1000.0),
+            terrain: TerrainType::Level,
+            adjacent_upstream: AdjacentRampType::None,
+            adjacent_downstream: AdjacentRampType::None,
+            ..Default::default()
+        };
+        let good = ServiceDemandBasis::ApproachingFreeway { ramp_fraction: 0.10 };
+        let nan_basis = ServiceDemandBasis::ApproachingFreeway {
+            ramp_fraction: f64::NAN,
+        };
+
+        let nan_target = md::ramp_service_flow_rate_ideal(&template, &good, f64::NAN).unwrap();
+        let nan_fraction = md::ramp_service_flow_rate_ideal(&template, &nan_basis, 28.0).unwrap();
+        assert!(
+            nan_target < 1e-9 && nan_fraction < 1e-9,
+            "both must reach the caller as a service flow rate rather than as a failure, \
+             got {nan_target} and {nan_fraction}"
+        );
+
+        assert!(validate_search(&good, f64::NAN).is_err());
+        assert!(validate_search(&good, f64::INFINITY).is_err());
+        assert!(validate_search(&good, 0.0).is_err());
+        assert!(validate_search(&good, -28.0).is_err());
+        assert!(validate_search(&nan_basis, 28.0).is_err());
+        let nan_v_f = ServiceDemandBasis::FixedFreeway { v_f: f64::NAN };
+        assert!(validate_search(&nan_v_f, 28.0).is_err());
+        assert!(validate_search(&ServiceDemandBasis::FixedFreeway { v_f: -1.0 }, 28.0).is_err());
+
+        // The control: the search the guard is wrapped around still runs, and
+        // on this segment it finds the Exhibit 28-4 LOS C value.
+        validate_search(&good, 28.0).expect("a real search must pass the guard");
+        let sfi_c = md::ramp_service_flow_rate_ideal(&template, &good, 28.0).unwrap();
+        assert!(
+            (sfi_c - 5280.0).abs() < 6.0,
+            "LOS C v_F should be the published 5,280 pc/h within the core's tolerance, got {sfi_c}"
+        );
+    }
+
+    /// The message names the field that arrived wrong, because both variants
+    /// carry exactly one number and a caller reading only "invalid" cannot tell
+    /// which basis it sent.
+    #[test]
+    fn the_rejection_names_the_offending_field() {
+        let e = validate_search(&ServiceDemandBasis::FixedFreeway { v_f: f64::NAN }, 28.0)
+            .unwrap_err();
+        assert!(e.contains("v_f"), "{e}");
+        let e = validate_search(
+            &ServiceDemandBasis::ApproachingFreeway {
+                ramp_fraction: f64::NAN,
+            },
+            28.0,
+        )
+        .unwrap_err();
+        assert!(e.contains("ramp_fraction"), "{e}");
+        let e = validate_search(
+            &ServiceDemandBasis::ApproachingFreeway { ramp_fraction: 0.1 },
+            f64::NAN,
+        )
+        .unwrap_err();
+        assert!(e.contains("target_density"), "{e}");
     }
 }
