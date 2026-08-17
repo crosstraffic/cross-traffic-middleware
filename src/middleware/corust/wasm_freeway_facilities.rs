@@ -1,6 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use transportations_library::hcm::chapter10::freeway_facilities::{FacilitySegment, FreewayFacility, SegmentType, Terrain};
+use transportations_library::hcm::chapter10::freeway_facilities::{
+    segment_ramp_section as core_segment_ramp_section, FacilitySegment, FreewayFacility,
+    SegmentType, Terrain, RAMP_INFLUENCE_AREA_FT,
+};
 use transportations_library::hcm::chapter10::managed_lanes::{CrossWeave, ManagedLaneFacility, MlSegmentInput};
 use transportations_library::hcm::chapter10::planning::{PlanningFacility, PlanningSection, PlanningSectionType};
 use transportations_library::hcm::chapter10::WorkZone;
@@ -918,5 +921,138 @@ impl WasmPlanningFacility {
         js_sys::Reflect::set(&obj, &JsValue::from_str("total_queue_mi"), &serde_wasm_bindgen::to_value(&total_queue_mi).unwrap_or(JsValue::NULL)).unwrap();
 
         JsValue::from(obj)
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Segmentation rules (Step A-2)
+// ═════════════════════════════════════════════════════════════════════════
+
+/// One piece of a segmented ramp section. The key names are the fixture
+/// schema's, so a returned piece is already the head of a `FacilitySegment`
+/// and a caller assembling a facility adds lanes and demands to it rather
+/// than translating it.
+#[derive(Serialize)]
+pub struct RampSectionPiece {
+    pub seg_type: String,
+    pub length_ft: f64,
+}
+
+/// HCM Chapter 10 Step A-2: divide the section between an on-ramp gore and
+/// the next off-ramp gore into analysis segments, per the segmentation rules
+/// of Section 2 and Exhibits 10-11 and 10-12.
+///
+/// Returns `[{ seg_type, length_ft }]` in upstream-to-downstream order, with
+/// zero-length pieces omitted:
+///
+/// - auxiliary lane between the gores: one `Weaving` piece;
+/// - gore-to-gore above 3,000 ft: `Merge` 1,500 + `Basic` (spacing − 3,000)
+///   + `Diverge` 1,500;
+/// - 1,500 ft to 3,000 ft: `Merge` (spacing − 1,500) + `OverlappingRamp`
+///   (3,000 − spacing) + `Diverge` (spacing − 1,500);
+/// - 1,500 ft or less with no auxiliary lane: a single `OverlappingRamp`
+///   over the whole distance, the truncation the manual calls highly
+///   unusual.
+///
+/// The one thing to read twice is what `gore_to_gore_ft` means in the
+/// auxiliary-lane case, because the answer comes back as the caller sent it
+/// and so a wrong value is invisible. The weaving *segment* is not the
+/// gore-to-gore distance: Chapter 10's segmentation rules put its boundaries
+/// 500 ft upstream and 500 ft downstream of the two gores (Exhibit 10-2), so
+/// a caller placing ramps by gore station must pass gore-to-gore + 1,000 ft
+/// here and carry the gore-to-gore distance itself as the segment's
+/// `short_length_ft`. Example Problem 1 is the check: its weaving segment is
+/// 2,640 ft long with a 1,640 ft short length.
+#[wasm_bindgen]
+pub fn segment_ramp_section(
+    gore_to_gore_ft: f64,
+    has_auxiliary_lane: bool,
+) -> Result<JsValue, JsValue> {
+    validate_gore_to_gore(gore_to_gore_ft).map_err(|e| JsValue::from_str(&e))?;
+    let pieces: Vec<RampSectionPiece> = core_segment_ramp_section(gore_to_gore_ft, has_auxiliary_lane)
+        .into_iter()
+        .map(|(seg_type, length_ft)| RampSectionPiece {
+            seg_type: format!("{seg_type:?}"),
+            length_ft,
+        })
+        .collect();
+    serde_wasm_bindgen::to_value(&pieces).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Ramp influence area length, ft: 1,500 ft downstream of an on-ramp gore
+/// and upstream of an off-ramp gore (Chapter 10 Section 2; Exhibit 10-1).
+///
+/// Bound so that a caller placing an isolated ramp — one with no paired ramp
+/// downstream of it, which `segment_ramp_section` does not describe — reads
+/// the length of its merge or diverge segment from the library rather than
+/// writing 1,500 down a second time.
+#[wasm_bindgen]
+pub fn ramp_influence_area_ft() -> f64 {
+    RAMP_INFLUENCE_AREA_FT
+}
+
+/// The guard is for the NaN, and the NaN is dangerous here rather than merely
+/// wrong: every comparison in the core's branch chain is false against it, so
+/// the section falls through to the single-overlap arm and comes back as one
+/// well-formed `OverlappingRamp` piece of NaN length. That length then passes
+/// `FreewayFacility::validate`, whose test is `length_ft <= 0.0`, and a
+/// facility built on it analyzes and prints numbers. A non-positive spacing is
+/// caught by that same test downstream, but it is rejected here too, because
+/// the section it describes does not exist.
+fn validate_gore_to_gore(gore_to_gore_ft: f64) -> Result<(), String> {
+    if !gore_to_gore_ft.is_finite() || gore_to_gore_ft <= 0.0 {
+        return Err(format!(
+            "gore_to_gore_ft must be finite and positive, got {gore_to_gore_ft}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the guard is for. Without it the core hands back a piece that is
+    /// well-formed in every way a downstream check looks at, so the assertion
+    /// is on the core's own return rather than only on the rejection.
+    #[test]
+    fn a_non_finite_spacing_would_return_a_nan_length_segment() {
+        let pieces = core_segment_ramp_section(f64::NAN, false);
+        assert_eq!(pieces.len(), 1, "the branch chain falls through to the overlap arm");
+        assert_eq!(pieces[0].0, SegmentType::OverlappingRamp);
+        assert!(pieces[0].1.is_nan());
+        // And that length survives the facility validator, whose length test
+        // is `<= 0.0` and is therefore false against a NaN.
+        // The validator's expression is reproduced literally rather than
+        // rewritten, because the point is that this exact test is what lets a
+        // NaN through.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        {
+            assert!(!(pieces[0].1 <= 0.0));
+        }
+
+        assert!(validate_gore_to_gore(f64::NAN).is_err());
+        assert!(validate_gore_to_gore(f64::INFINITY).is_err());
+        assert!(validate_gore_to_gore(0.0).is_err());
+        assert!(validate_gore_to_gore(-1500.0).is_err());
+        // The control: a real spacing passes and still segments the way
+        // Exhibit 10-11 says it does.
+        validate_gore_to_gore(2000.0).expect("a real spacing must pass the guard");
+        assert_eq!(
+            core_segment_ramp_section(2000.0, false),
+            vec![
+                (SegmentType::Merge, 500.0),
+                (SegmentType::OverlappingRamp, 1000.0),
+                (SegmentType::Diverge, 500.0),
+            ]
+        );
+    }
+
+    /// The influence-area constant is bound rather than restated, so the test
+    /// that matters is that the binding reads the library's value.
+    #[test]
+    fn the_influence_area_is_the_librarys_constant() {
+        assert_eq!(ramp_influence_area_ft(), RAMP_INFLUENCE_AREA_FT);
+        assert_eq!(ramp_influence_area_ft(), 1500.0);
     }
 }
