@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use transportations_library::hcm::chapter10::freeway_facilities::{
     segment_ramp_section as core_segment_ramp_section, FacilitySegment, FreewayFacility,
-    SegmentType, Terrain, RAMP_INFLUENCE_AREA_FT,
+    SegmentType, Terrain, RAMP_INFLUENCE_AREA_FT, WEAVE_INFLUENCE_EXTENSION_FT,
 };
 use transportations_library::hcm::chapter10::managed_lanes::{CrossWeave, ManagedLaneFacility, MlSegmentInput};
 use transportations_library::hcm::chapter10::planning::{PlanningFacility, PlanningSection, PlanningSectionType};
@@ -991,6 +991,21 @@ pub fn ramp_influence_area_ft() -> f64 {
     RAMP_INFLUENCE_AREA_FT
 }
 
+/// Half of a weaving segment's overhang past its gores, ft: Chapter 10
+/// Section 2 puts the weave influence area 500 ft upstream and 500 ft
+/// downstream of the two respective gore areas (Exhibit 10-2).
+///
+/// Bound because this is the number the paragraph above `segment_ramp_section`
+/// warns about. A caller placing ramps by gore station passes
+/// gore-to-gore + 2 x this before calling, and the wrong value there comes
+/// back looking exactly like a right one, so the one place it is worth having
+/// the library state the number is the place where the caller has to do the
+/// arithmetic itself.
+#[wasm_bindgen]
+pub fn weave_influence_extension_ft() -> f64 {
+    WEAVE_INFLUENCE_EXTENSION_FT
+}
+
 /// The guard is for the NaN, and the NaN is dangerous here rather than merely
 /// wrong: every comparison in the core's branch chain is false against it, so
 /// the section falls through to the single-overlap arm and comes back as one
@@ -1054,5 +1069,29 @@ mod tests {
     fn the_influence_area_is_the_librarys_constant() {
         assert_eq!(ramp_influence_area_ft(), RAMP_INFLUENCE_AREA_FT);
         assert_eq!(ramp_influence_area_ft(), 1500.0);
+    }
+
+    /// Same for the weave extension, and then the thing the extension is for.
+    /// Reading the constant back is a tautology on its own, so the assertion
+    /// that carries weight is that gore-to-gore plus two extensions is what
+    /// `segment_ramp_section` turns into Example Problem 1's weaving segment:
+    /// 1,640 ft of short length in, 2,640 ft of weave out. Passing the
+    /// gore-to-gore distance straight through returns a well-formed weave too,
+    /// of the wrong length, which is why that case is asserted beside it.
+    #[test]
+    fn the_weave_extension_is_the_librarys_constant() {
+        assert_eq!(weave_influence_extension_ft(), WEAVE_INFLUENCE_EXTENSION_FT);
+        assert_eq!(weave_influence_extension_ft(), 500.0);
+
+        let short_length = 1640.0;
+        let extended = short_length + 2.0 * weave_influence_extension_ft();
+        assert_eq!(
+            core_segment_ramp_section(extended, true),
+            vec![(SegmentType::Weaving, 2640.0)]
+        );
+        assert_eq!(
+            core_segment_ramp_section(short_length, true),
+            vec![(SegmentType::Weaving, 1640.0)]
+        );
     }
 }
