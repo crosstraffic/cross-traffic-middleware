@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.13 - 2026-08
+
+0.3.12 bound the Step A-2 segmentation and then spent a paragraph of this file warning that `segment_ramp_section`'s argument is not the gore-to-gore distance in the auxiliary-lane case. A warning is what you write when the number the caller needs is not available to them. It is available now, so the warning becomes a function.
+
+### Added
+
+- **`weave_influence_extension_ft()`**, the 500 ft of Exhibit 10-2, re-exported from the library the same way `ramp_influence_area_ft()` re-exports the 1,500 ft of Exhibit 10-1. A caller placing ramps by gore station passes gore-to-gore + 2 x this to `segment_ramp_section` and carries the gore-to-gore distance itself as the segment's `short_length_ft`. The reason to read it rather than write 500 down is the one the 0.3.12 notes give: the core returns the auxiliary-lane argument unchanged, so a weave coded gore-to-gore comes back well-formed and short, and a caller that has its own copy of the number is a caller whose copy can drift from the library's. The test asserts the binding reads the library's constant and then that 1,640 + 2 x 500 is what the core turns into Example Problem 1's 2,640 ft weaving segment, with the gore-to-gore coding asserted beside it at its wrong 1,640 ft, so the constant cannot be changed without the segmentation meaning failing too.
+
+This release needs `transportations_library` 0.3.6, which exports the constant. Publish the library first.
+
 ## 0.3.12 - 2026-08
 
 Every freeway surface this crate carries takes a facility that is already segmented. `WasmFacilitySegment` asks for a segment type and a length, and where those came from is the caller's problem. That is the right shape for a page transcribing a published example, because the example prints its own segment table, and it is the wrong shape for an editor where the user places ramps and the segments are supposed to follow. Chapter 10 Step A-2 is the missing half, and the library has had it since the Chapter 10 core landed. This release binds it, so the web calculator's facility builder derives its segment table from the library rather than from a second copy of the rules written in JS.
